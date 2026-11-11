@@ -12,6 +12,11 @@ A tiny greyscale drawing app for Android (built for Pixel Fold). No libraries, p
   - Size only from pressure: Ink pen, Brush pen (strong taper), Fine liner (no pressure), Marker (see-through).
   - Size + opacity from pressure: Dry ink, HB pencil, 6B pencil, Charcoal (paper grain), Soft shading, Airbrush.
   - Opacity only from pressure: Hard round.
+  - **Import brushes**: in the brush list tap "+ Import brushes". Supports Procreate `.brush` / `.brushset`
+    and Photoshop `.abr` (sampled tips). Opening a brush file via Open/Share also imports it.
+    Imported: tip shape, grain texture (Procreate), spacing and pressure size/opacity (Procreate).
+    Not imported: other Procreate/Photoshop dynamics (jitter, tilt, rotation, wet mix, etc.).
+    Long-press an imported brush to delete it.
   - The eraser uses the selected brush's shape. Stylus eraser end or side button also erases.
 - **Two fingers**: pinch to zoom, drag to pan, twist to rotate. **Fit** resets the view.
 - **Two-finger tap** = undo, **three-finger tap** = redo. Up to 100 steps.

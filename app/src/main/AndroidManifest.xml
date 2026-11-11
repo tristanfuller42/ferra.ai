@@ -25,6 +25,7 @@
                 <data android:mimeType="application/photoshop" />
                 <data android:mimeType="application/x-photoshop" />
                 <data android:mimeType="application/psd" />
+                <data android:mimeType="application/zip" />
             </intent-filter>
         </activity>
     </application>

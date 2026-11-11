@@ -77,15 +77,40 @@ public class CanvasView extends View {
 
     /** Brush preset. minSize/minAlpha = size/opacity at zero pressure (1 = pressure doesn't affect it). */
     public static final class Brush {
-        public final String name;
-        final float minSize, minAlpha, alpha, hard, grain, spacing;
+        public String name;
+        float minSize, minAlpha, alpha, hard, grain, spacing;
+        /** Optional tip image (0..255 = paint amount) as a mip chain, and grain texture. */
+        byte[][] tip; int[] tw, th;
+        byte[] tex; int gw, gh;
+        public java.io.File file;      // set for imported brushes (saved copy)
         Brush(String n, float minSize, float minAlpha, float alpha, float hard, float grain, float spacing) {
             name = n; this.minSize = minSize; this.minAlpha = minAlpha; this.alpha = alpha;
             this.hard = hard; this.grain = grain; this.spacing = spacing;
         }
+
+        /** Sets the tip and builds half-size copies so small stamps stay smooth. */
+        void setTip(byte[] t, int w, int h) {
+            ArrayList<byte[]> ts = new ArrayList<>();
+            ArrayList<Integer> ws = new ArrayList<>(), hs = new ArrayList<>();
+            ts.add(t); ws.add(w); hs.add(h);
+            while (w > 2 && h > 2) {
+                int nw = w / 2, nh = h / 2;
+                byte[] n = new byte[nw * nh];
+                for (int y = 0; y < nh; y++)
+                    for (int x = 0; x < nw; x++) {
+                        int i = y * 2 * w + x * 2;
+                        n[y * nw + x] = (byte) (((t[i] & 255) + (t[i + 1] & 255) + (t[i + w] & 255) + (t[i + w + 1] & 255)) / 4);
+                    }
+                t = n; w = nw; h = nh;
+                ts.add(t); ws.add(w); hs.add(h);
+            }
+            tip = ts.toArray(new byte[0][]);
+            tw = new int[ws.size()]; th = new int[hs.size()];
+            for (int i = 0; i < tw.length; i++) { tw[i] = ws.get(i); th[i] = hs.get(i); }
+        }
     }
 
-    public static final Brush[] BRUSHES = {
+    public static final ArrayList<Brush> BRUSHES = new ArrayList<>(java.util.Arrays.asList(
         //          name            minSize minAlpha alpha hard  grain spacing
         new Brush("Ink pen",        0.15f, 1f,    1f,   0.9f, 0f,    0.08f),
         new Brush("Brush pen",      0.03f, 1f,    1f,   0.85f, 0f,   0.05f),
@@ -97,8 +122,8 @@ public class CanvasView extends View {
         new Brush("Charcoal",       0.6f,  0.2f,  1f,   0.4f, 0.85f, 0.1f),
         new Brush("Soft shading",   0.5f,  0.05f, 0.8f, 0f,   0f,    0.1f),
         new Brush("Airbrush",       1f,    0.02f, 0.6f, 0f,   0f,    0.1f),
-        new Brush("Hard round",     1f,    0.1f,  1f,   0.9f, 0f,    0.08f),
-    };
+        new Brush("Hard round",     1f,    0.1f,  1f,   0.9f, 0f,    0.08f)
+    ));
 
     /** 128x128 tileable paper grain, 0..255. */
     private static final byte[] NOISE = new byte[128 * 128];
@@ -117,7 +142,7 @@ public class CanvasView extends View {
         }
     }
 
-    public Brush brush = BRUSHES[0];
+    public Brush brush = BRUSHES.get(0);
     public float opacity = 1f;
 
     // Stroke state
@@ -323,17 +348,35 @@ public class CanvasView extends View {
         int y0 = Math.max(0, (int) (cy - r - 1)), y1 = Math.min(docH - 1, (int) (cy + r + 1));
         if (x0 > x1 || y0 > y1) return;
         float grain = b.grain;
+        // Tip image: pick the mip level closest to the stamp size
+        byte[] tip = null; int tw = 0, th = 0; float sc = 0, ox = 0, oy = 0;
+        if (b.tip != null) {
+            int lv = 0;
+            while (lv + 1 < b.tip.length && Math.max(b.tw[lv + 1], b.th[lv + 1]) >= 2 * r) lv++;
+            tip = b.tip[lv]; tw = b.tw[lv]; th = b.th[lv];
+            sc = Math.max(tw, th) / (2 * r);
+            ox = tw / 2f - 0.5f; oy = th / 2f - 0.5f;
+        }
         for (int y = y0; y <= y1; y++) {
             float fy = y + 0.5f - cy;
             int row = y * docW;
             for (int x = x0; x <= x1; x++) {
                 float fx = x + 0.5f - cx;
-                float dist = (float) Math.sqrt(fx * fx + fy * fy);
-                float c = (r - dist) / soft + (b.hard > 0.5f ? 0.5f : 0f);
+                float c;
+                if (tip != null) {
+                    c = sample(tip, tw, th, fx * sc + ox, fy * sc + oy) / 255f;
+                } else {
+                    float dist = (float) Math.sqrt(fx * fx + fy * fy);
+                    c = (r - dist) / soft + (b.hard > 0.5f ? 0.5f : 0f);
+                    if (c > 1) c = 1;
+                    else if (c > 0 && b.hard <= 0.5f) c = c * c * (3 - 2 * c);
+                }
                 if (c <= 0) continue;
-                if (c > 1) c = 1;
-                else if (b.hard <= 0.5f) c = c * c * (3 - 2 * c);
-                if (grain > 0) c *= 1 - grain + grain * NOISE[((y & 127) << 7) | (x & 127)] / 255f;
+                if (grain > 0) {
+                    int g = b.tex != null ? b.tex[(y % b.gh) * b.gw + (x % b.gw)] & 255
+                                          : NOISE[((y & 127) << 7) | (x & 127)] & 255;
+                    c *= 1 - grain + grain * g / 255f;
+                }
                 int v = (int) (a * c);
                 if (v > (mask[row + x] & 255)) mask[row + x] = (byte) v;
             }
@@ -372,6 +415,19 @@ public class CanvasView extends View {
         r.setEmpty();
         cur().dirty = true;
         invalidate();
+    }
+
+    /** Bilinear sample of a greyscale image, 0 outside. */
+    private static float sample(byte[] t, int w, int h, float u, float v) {
+        int x = (int) Math.floor(u), y = (int) Math.floor(v);
+        float fx = u - x, fy = v - y;
+        float a = px(t, w, h, x, y), b = px(t, w, h, x + 1, y);
+        float c = px(t, w, h, x, y + 1), d = px(t, w, h, x + 1, y + 1);
+        return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+    }
+
+    private static int px(byte[] t, int w, int h, int x, int y) {
+        return x < 0 || y < 0 || x >= w || y >= h ? 0 : t[y * w + x] & 255;
     }
 
     private void clearMask(Rect r) {

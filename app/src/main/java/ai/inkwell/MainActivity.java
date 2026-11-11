@@ -39,7 +39,7 @@ import java.io.OutputStream;
 
 public class MainActivity extends Activity {
     private static final long MAX_PIXELS = 3000L * 3000L;
-    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_EXPORT = 10;
+    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_BRUSH = 3, REQ_EXPORT = 10;
     private static final String[] FORMATS = {"PNG", "JPEG", "WebP", "PDF", "PSD (layers)"};
     private static final String[] MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf", "image/vnd.adobe.photoshop"};
     private static final String[] EXTS = {"png", "jpg", "webp", "pdf", "psd"};
@@ -148,6 +148,7 @@ public class MainActivity extends Activity {
         });
         setContentView(root);
 
+        loadBrushes();
         // Restore last drawing, then handle "Open with" / "Share" intents
         new Thread(() -> {
             Psd.Doc d = null;
@@ -223,6 +224,16 @@ public class MainActivity extends Activity {
             t.setBackgroundColor(on ? Color.BLACK : 0);
             t.setTextColor(on ? Color.WHITE : Color.BLACK);
             t.setOnClickListener(v -> { canvas.brush = br; updateBrush(); dlg[0].dismiss(); });
+            if (br.file != null) t.setOnLongClickListener(v -> {
+                confirm("Delete brush \"" + br.name + "\"?", () -> {
+                    br.file.delete();
+                    CanvasView.BRUSHES.remove(br);
+                    if (canvas.brush == br) canvas.brush = CanvasView.BRUSHES.get(0);
+                    updateBrush();
+                    dlg[0].dismiss();
+                });
+                return true;
+            });
             box.addView(t);
         }
         TextView ol = new TextView(this);
@@ -236,6 +247,20 @@ public class MainActivity extends Activity {
             public void onProgressChanged(SeekBar s, int v, boolean u) { canvas.opacity = Math.max(1, v) / 100f; }
         });
         box.addView(sb, new LinearLayout.LayoutParams(-1, (int) (48 * dp)));
+        TextView imp = new TextView(this);
+        imp.setText("+ Import brushes (Procreate .brush/.brushset, Photoshop .abr)");
+        imp.setTextColor(Color.BLACK);
+        imp.setPadding(p, p, p, p);
+        imp.setOnClickListener(v -> {
+            dlg[0].dismiss();
+            startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                    .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQ_BRUSH);
+        });
+        box.addView(imp);
+        TextView hint = new TextView(this);
+        hint.setText("Long-press an imported brush to delete it.");
+        hint.setPadding(p, 0, p, p);
+        box.addView(hint);
         ScrollView sv = new ScrollView(this);
         sv.addView(box);
         dlg[0] = new AlertDialog.Builder(this).setTitle("Brushes").setView(sv).setPositiveButton("Done", null).show();
@@ -372,7 +397,54 @@ public class MainActivity extends Activity {
         if (loaded) handleIntent(i); else setIntent(i);
     }
 
+    private File brushDir() {
+        File d = new File(getFilesDir(), "brushes");
+        d.mkdirs();
+        return d;
+    }
+
+    private void loadBrushes() {
+        File[] fs = brushDir().listFiles();
+        if (fs == null) return;
+        java.util.Arrays.sort(fs);
+        for (File f : fs) {
+            try { CanvasView.BRUSHES.add(Brushes.load(f)); } catch (Exception ignored) { }
+        }
+    }
+
+    private void importBrushes(Uri uri) {
+        toast("Importing brushes…");
+        new Thread(() -> {
+            try {
+                byte[] data;
+                try (InputStream in = getContentResolver().openInputStream(uri)) { data = Brushes.readAll(in); }
+                java.util.List<CanvasView.Brush> bs = Brushes.read(data);
+                long t = System.currentTimeMillis();
+                for (int i = 0; i < bs.size(); i++)
+                    Brushes.save(bs.get(i), new File(brushDir(), t + "_" + String.format("%04d", i) + ".fbr"));
+                runOnUiThread(() -> {
+                    CanvasView.BRUSHES.addAll(bs);
+                    canvas.brush = bs.get(0);
+                    updateBrush();
+                    toast(bs.size() + " brush(es) imported");
+                });
+            } catch (Throwable e) {
+                runOnUiThread(() -> toast("Could not import brushes: " + e.getMessage()));
+            }
+        }).start();
+    }
+
+    /** True if the file is a brush file (Procreate zip or Photoshop .abr). */
+    private boolean isBrushFile(Uri uri) {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            byte[] m = new byte[4];
+            if (in.read(m) < 4) return false;
+            return (m[0] == 'P' && m[1] == 'K') || Brushes.looksLikeAbr(m);
+        } catch (Exception e) { return false; }
+    }
+
     private void load(Uri uri, boolean asLayer) {
+        if (isBrushFile(uri)) { importBrushes(uri); return; }
         toast("Opening…");
         new Thread(() -> {
             try {
@@ -416,7 +488,7 @@ public class MainActivity extends Activity {
                 p.render(img, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
             }
         } else if (sig.startsWith("PK")) {
-            throw new Exception("Procreate files can't be read directly. In Procreate use Share → PSD, then open that.");
+            throw new Exception("Procreate artwork files can't be read directly. In Procreate use Share → PSD, then open that.");
         } else {
             name = "Image";
             img = ImageDecoder.decodeBitmap(ImageDecoder.createSource(getContentResolver(), uri), (dec, info, src) -> {
@@ -494,6 +566,7 @@ public class MainActivity extends Activity {
         if (req == REQ_EXPORT) export(data.getData(), exportFormat);
         else if (req == REQ_OPEN) load(data.getData(), false);
         else if (req == REQ_IMPORT) load(data.getData(), true);
+        else if (req == REQ_BRUSH) importBrushes(data.getData());
     }
 
     // ---------- Autosave ----------
