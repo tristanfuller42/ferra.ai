@@ -23,6 +23,7 @@ A tiny greyscale drawing app for Android (built for Pixel Fold). No libraries, p
 - **Move tool**: drag moves the current layer; pinch/twist scales and rotates it. Applied when you pick another tool.
 - **Layers**: add, copy, delete, reorder, merge down, clear, hide/show, opacity.
 - Once a stylus is used, single fingers only pan (palm rejection).
+- **Canvas**: start a new drawing at any size (presets: screen, square, A4/Letter/A5 at 300 dpi, comic page, HD, 4K, Instagram, or custom), or resize the current one (scale artwork, or crop/extend). Max about 9 megapixels.
 - Drawing autosaves (with layers) when you leave the app.
 
 ## Files

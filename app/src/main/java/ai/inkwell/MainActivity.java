@@ -85,10 +85,7 @@ public class MainActivity extends Activity {
         button(bar, "Open", this::openMenu);
         button(bar, "Export", this::exportMenu);
         button(bar, "Fit", v -> canvas.fit());
-        button(bar, "New", v -> confirm("Start a new drawing? The current one is replaced.", () -> {
-            Rect m = getWindowManager().getMaximumWindowMetrics().getBounds();
-            newDocument(Math.min(m.width(), m.height()), Math.max(m.width(), m.height()));
-        }));
+        button(bar, "Canvas", v -> canvasDialog());
         setTool(CanvasView.DRAW);
         updateBrush();
         updateColor();
@@ -168,6 +165,124 @@ public class MainActivity extends Activity {
     private abstract static class Slider implements SeekBar.OnSeekBarChangeListener {
         public void onStartTrackingTouch(SeekBar s) { }
         public void onStopTrackingTouch(SeekBar s) { }
+    }
+
+    /** New drawing or resize, with size presets. */
+    private void canvasDialog() {
+        Rect scr = getWindowManager().getMaximumWindowMetrics().getBounds();
+        int sw = Math.min(scr.width(), scr.height()), sh = Math.max(scr.width(), scr.height());
+        Object[][] presets = {
+            {"This screen", sw, sh},
+            {"Current canvas", canvas.docW, canvas.docH},
+            {"Square 2048", 2048, 2048},
+            {"Square 2900 (max)", 2900, 2900},
+            {"iPad Procreate default", 2048, 2732},
+            {"A4 @ 300 dpi", 2480, 3508},
+            {"US Letter @ 300 dpi", 2550, 3300},
+            {"A5 @ 300 dpi", 1748, 2480},
+            {"Comic page (6.6×10.2 in) @ 300", 1988, 3075},
+            {"HD 1920×1080", 1920, 1080},
+            {"4K 3840×2160", 3840, 2160},
+            {"Instagram portrait", 1080, 1350},
+        };
+        int p = (int) (12 * dp);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(p, p, p, p);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        android.widget.EditText wIn = number(canvas.docW), hIn = number(canvas.docH);
+        row.addView(wIn, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView x = new TextView(this);
+        x.setText(" × ");
+        row.addView(x);
+        row.addView(hIn, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView swap = new TextView(this);
+        swap.setText("  ⇄ Swap");
+        swap.setPadding(p, p, p, p);
+        swap.setOnClickListener(v -> {
+            CharSequence t = wIn.getText();
+            wIn.setText(hIn.getText());
+            hIn.setText(t);
+        });
+        row.addView(swap);
+        box.addView(row);
+
+        TextView info = new TextView(this);
+        info.setPadding(0, 0, 0, p);
+        box.addView(info);
+        Runnable upd = () -> {
+            int w = parse(wIn), h = parse(hIn);
+            long px = (long) w * h;
+            info.setText(w <= 0 || h <= 0 ? "Enter a width and height in pixels"
+                    : px > MAX_PIXELS ? "Too big: max about 9 megapixels (" + px / 100000 / 10f + " MP)"
+                    : String.format("%.1f megapixels · about %d layers", px / 1e6, layerCap(w, h)));
+        };
+        android.text.TextWatcher tw = new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
+            public void onTextChanged(CharSequence c, int a, int b, int d) { }
+            public void afterTextChanged(android.text.Editable e) { upd.run(); }
+        };
+        wIn.addTextChangedListener(tw);
+        hIn.addTextChangedListener(tw);
+        upd.run();
+
+        for (Object[] pr : presets) {
+            TextView t = new TextView(this);
+            t.setText(pr[0] + "   " + pr[1] + " × " + pr[2]);
+            t.setPadding(p / 2, p * 2 / 3, p / 2, p * 2 / 3);
+            t.setTextSize(15);
+            t.setOnClickListener(v -> { wIn.setText(String.valueOf(pr[1])); hIn.setText(String.valueOf(pr[2])); });
+            box.addView(t);
+        }
+        android.widget.CheckBox scale = new android.widget.CheckBox(this);
+        scale.setText("When resizing: scale artwork to fit (off = crop/extend around centre)");
+        scale.setChecked(true);
+        box.addView(scale);
+
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        AlertDialog d = new AlertDialog.Builder(this).setTitle("Canvas size").setView(sv)
+                .setPositiveButton("New drawing", null)
+                .setNeutralButton("Resize current", null)
+                .setNegativeButton("Cancel", null).show();
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            int w = parse(wIn), h = parse(hIn);
+            if (!valid(w, h)) return;
+            d.dismiss();
+            confirm("Start a new " + w + " × " + h + " drawing? The current one is replaced.", () -> newDocument(w, h));
+        });
+        d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+            int w = parse(wIn), h = parse(hIn);
+            if (!valid(w, h)) return;
+            if ((long) layerCap(w, h) < canvas.layers.size()) { toast("Too many layers for that size"); return; }
+            d.dismiss();
+            confirm("Resize to " + w + " × " + h + "? Undo history is cleared.", () -> canvas.resizeDocument(w, h, scale.isChecked()));
+        });
+    }
+
+    private android.widget.EditText number(int v) {
+        android.widget.EditText e = new android.widget.EditText(this);
+        e.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        e.setText(String.valueOf(v));
+        e.setSelectAllOnFocus(true);
+        return e;
+    }
+
+    private static int parse(android.widget.EditText e) {
+        try { return Integer.parseInt(e.getText().toString().trim()); } catch (Exception x) { return 0; }
+    }
+
+    private boolean valid(int w, int h) {
+        if (w < 16 || h < 16) { toast("Minimum is 16 × 16"); return false; }
+        if ((long) w * h > MAX_PIXELS) { toast("Too big: max about 9 megapixels"); return false; }
+        return true;
+    }
+
+    private static int layerCap(int w, int h) {
+        long per = (long) w * h * 4;
+        return (int) Math.max(2, Math.min(50, Runtime.getRuntime().maxMemory() * 55 / 100 / per - 2));
     }
 
     private void newDocument(int w, int h) {

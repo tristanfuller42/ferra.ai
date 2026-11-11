@@ -188,6 +188,30 @@ public class CanvasView extends View {
         changed();
     }
 
+    /** Changes canvas size. scale=true fits artwork to the new size; false keeps it 1:1, centred (crop/extend). */
+    public void resizeDocument(int w, int h, boolean scale) {
+        commitMove();
+        int keep = current;
+        ArrayList<Layer> out = new ArrayList<>();
+        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
+        float s = scale ? Math.min((float) w / docW, (float) h / docH) : 1f;
+        Matrix m = new Matrix();
+        m.setScale(s, s);
+        m.postTranslate((w - docW * s) / 2f, (h - docH * s) / 2f);
+        for (Layer l : layers) {
+            Layer n = new Layer(Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888), l.name);
+            n.opacity = l.opacity;
+            n.visible = l.visible;
+            new Canvas(n.bmp).drawBitmap(l.bmp, m, p);
+            l.bmp.recycle();
+            out.add(n);
+        }
+        setDocument(w, h, out);
+        current = Math.min(keep, layers.size() - 1);
+        syncBackup();
+        changed();
+    }
+
     public Layer newLayer(String name) {
         return new Layer(Bitmap.createBitmap(docW, docH, Bitmap.Config.ARGB_8888), name);
     }
