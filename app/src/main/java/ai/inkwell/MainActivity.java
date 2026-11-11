@@ -51,6 +51,51 @@ public class MainActivity extends Activity {
     private File gdir;
     private String curId;
     private boolean tlOn, tlBusy;
+    private Ui.VSlider sizeS, opS;
+
+    // ---- Per-tool settings (like Procreate): brush, size and opacity for each painting tool ----
+    private static final int[] SLOT_TOOLS = {CanvasView.DRAW, CanvasView.SMUDGE, CanvasView.ERASE, CanvasView.CLONE};
+    private final String[] tBrush = {"Ink pen", "Soft shading", "Hard round", "Hard round"};
+    private final float[] tSize = {12, 30, 40, 30};
+    private final float[] tOp = {1, 1, 1, 1};
+
+    private static int slot(int tool) {
+        for (int i = 0; i < SLOT_TOOLS.length; i++) if (SLOT_TOOLS[i] == tool) return i;
+        return -1;
+    }
+
+    /** Remembers the canvas's current brush/size/opacity for this tool. */
+    private void storeTool(int tool) {
+        int k = slot(tool);
+        if (k < 0) return;
+        tBrush[k] = canvas.brush.name;
+        tSize[k] = canvas.size;
+        tOp[k] = canvas.opacity;
+        if (prefs != null) prefs.edit().putString("tb" + k, tBrush[k]).putFloat("ts" + k, tSize[k]).putFloat("to" + k, tOp[k]).apply();
+    }
+
+    /** Puts this tool's remembered settings back on the canvas and the sidebar. */
+    private void applyTool(int tool) {
+        int k = slot(tool);
+        if (k < 0) return;
+        CanvasView.Brush b = CanvasView.BRUSHES.get(0);
+        for (CanvasView.Brush x : CanvasView.BRUSHES) if (x.name.equals(tBrush[k])) { b = x; break; }
+        canvas.brush = b;
+        canvas.size = tSize[k];
+        canvas.opacity = tOp[k];
+        if (sizeS != null) { sizeS.value = (float) Math.sqrt(Math.max(0, canvas.size - 1) / 149f); sizeS.invalidate(); }
+        if (opS != null) { opS.value = canvas.opacity; opS.invalidate(); }
+        if (brushName != null) updateBrush();
+    }
+
+    private void loadToolPrefs() {
+        for (int k = 0; k < SLOT_TOOLS.length; k++) {
+            tBrush[k] = prefs.getString("tb" + k, tBrush[k]);
+            tSize[k] = prefs.getFloat("ts" + k, tSize[k]);
+            tOp[k] = prefs.getFloat("to" + k, tOp[k]);
+        }
+    }
+
     private Ui.Icon brushBtn, eraseBtn, moveBtn, colorBtn, layersBtn, pickBtn, smudgeBtn, adjustBtn, selectBtn;
     private LinearLayout bottom;
     private TextView brushName;
@@ -114,11 +159,11 @@ public class MainActivity extends Activity {
         sbg.setCornerRadius(12 * dp);
         side.setBackground(sbg);
         side.setPadding(0, (int) (6 * dp), 0, (int) (6 * dp));
-        Ui.VSlider sizeS = new Ui.VSlider(this, (float) Math.sqrt((canvas.size - 1) / 149f));
+        sizeS = new Ui.VSlider(this, (float) Math.sqrt((canvas.size - 1) / 149f));
         sizeS.listener = (v, done) -> canvas.size = 1 + 149 * v * v; // finer control at small sizes
         side.addView(sizeS, new LinearLayout.LayoutParams((int) (40 * dp), (int) (150 * dp)));
         pickBtn = icon(side, Ui.PICK, (int) (40 * dp), v -> { canvas.pickNext = !canvas.pickNext; pickBtn.setOn(canvas.pickNext); });
-        Ui.VSlider opS = new Ui.VSlider(this, canvas.opacity);
+        opS = new Ui.VSlider(this, canvas.opacity);
         opS.listener = (v, done) -> canvas.opacity = Math.max(0.01f, v);
         side.addView(opS, new LinearLayout.LayoutParams((int) (40 * dp), (int) (150 * dp)));
         icon(side, Ui.UNDO, (int) (40 * dp), v -> canvas.undo());
@@ -242,6 +287,8 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("inkwell", MODE_PRIVATE);
         tlOn = prefs.getBoolean("timelapse", true);
         canvas.fingerPaint = prefs.getBoolean("fingerPaint", false);
+        loadToolPrefs();
+        applyTool(canvas.tool);
         gdir = new File(getFilesDir(), "gallery");
         gdir.mkdirs();
         if (autosave.exists()) { // move the pre-gallery drawing into the gallery
@@ -437,6 +484,10 @@ public class MainActivity extends Activity {
     private void setTool(int t) {
         if (canvas.adjusting()) finishAdjust(true);      // like Procreate: picking another tool applies
         if (canvas.liquifying()) { canvas.endLiquify(true); }
+        if (t != canvas.tool) {
+            storeTool(canvas.tool);     // only painting tools have settings to keep
+            applyTool(t);
+        }
         canvas.setTool(t);
         brushBtn.setOn(t == CanvasView.DRAW);
         smudgeBtn.setOn(t == CanvasView.SMUDGE);
@@ -652,7 +703,6 @@ public class MainActivity extends Activity {
         if (!canvas.adjusting()) return;
         canvas.endAdjust(apply ? adj.fn.apply(adjVals) : null);
         bottom.setVisibility(View.GONE);
-        canvas.tool = CanvasView.DRAW;
         setTool(CanvasView.DRAW);
     }
 
@@ -1755,6 +1805,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        storeTool(canvas.tool);
         if (loaded) saveCurrent(null);
     }
 

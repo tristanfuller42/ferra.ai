@@ -51,7 +51,8 @@ long-press to rename, duplicate or delete. Drawings save automatically.
     Imported: tip shape, grain texture (Procreate), spacing and pressure size/opacity (Procreate).
     Not imported: other Procreate/Photoshop dynamics (jitter, tilt, rotation, wet mix, etc.).
     Long-press an imported brush to delete it.
-  - The eraser uses the selected brush's shape. Stylus eraser end or side button also erases.
+  - Brush, Smudge, Eraser and Clone each remember their own brush, size and opacity (like Procreate).
+  - Stylus eraser end or side button also erases.
 - **Gestures** (like Procreate):
   - Two fingers: pinch zoom, drag pan, twist rotate. **Quick pinch-in** = fit canvas to screen.
   - Two-finger tap = undo. Two-finger **hold** = keep undoing. Three-finger tap = redo.

@@ -346,4 +346,46 @@ public class FeatureTest extends Base {
         touch(cv, ev(MotionEvent.ACTION_UP, new float[][]{{W * .4f, H * .5f}}, MotionEvent.TOOL_TYPE_FINGER, 1));
         assertTrue("two-finger tap undid", inkSum(L()) < ink);
     }
+
+    @Test public void each_tool_remembers_its_settings() {
+        CanvasView.Brush pencil = null, brushPen = null;
+        for (CanvasView.Brush b : CanvasView.BRUSHES) { if (b.name.equals("HB pencil")) pencil = b; if (b.name.equals("Brush pen")) brushPen = b; }
+        call(act, "setTool", CanvasView.DRAW);
+        cv.brush = pencil; cv.size = 5; cv.opacity = 0.6f;
+        call(act, "setTool", CanvasView.ERASE);
+        cv.brush = brushPen; cv.size = 140; cv.opacity = 1f;
+        call(act, "setTool", CanvasView.SMUDGE);
+        cv.size = 50;
+        call(act, "setTool", CanvasView.DRAW);
+        assertEquals("ink brush kept", pencil, cv.brush);
+        assertEquals("ink size kept", 5f, cv.size, 0.01f);
+        assertEquals(0.6f, cv.opacity, 0.001f);
+        Ui_value("ink slider shows small size", 5);
+        call(act, "setTool", CanvasView.ERASE);
+        assertEquals("eraser brush kept", brushPen, cv.brush);
+        assertEquals("eraser size kept", 140f, cv.size, 0.01f);
+        Ui_value("eraser slider shows big size", 140);
+        // through an adjustment and back
+        Object[] adjs = (Object[]) call(act, "adjustments");
+        call(act, "startAdjust", adjs[0]);
+        call(act, "finishAdjust", true);
+        assertEquals("back on brush with ink settings", 5f, cv.size, 0.01f);
+        call(act, "setTool", CanvasView.SMUDGE);
+        assertEquals(50f, cv.size, 0.01f);
+        // survives a restart
+        call(act, "setTool", CanvasView.DRAW);
+        ctl.pause().stop();
+        settle();
+        launch();
+        assertEquals("ink size after restart", 5f, cv.size, 0.01f);
+        assertEquals(pencil.name, cv.brush.name);
+        call(act, "setTool", CanvasView.ERASE);
+        assertEquals("eraser size after restart", 140f, cv.size, 0.01f);
+    }
+
+    void Ui_value(String msg, float size) {
+        Object slider = get(act, "sizeS");
+        float v = (Float) get(slider, "value");
+        assertEquals(msg, (float) Math.sqrt((size - 1) / 149f), v, 0.01f);
+    }
 }
