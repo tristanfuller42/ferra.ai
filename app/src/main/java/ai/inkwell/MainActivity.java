@@ -45,7 +45,10 @@ public class MainActivity extends Activity {
     private static final String[] EXTS = {"png", "jpg", "webp", "pdf", "psd"};
 
     private CanvasView canvas;
-    private TextView brushBtn, eraseBtn, moveBtn, colorBtn;
+    private Ui.Icon brushBtn, eraseBtn, moveBtn, colorBtn, layersBtn, pickBtn;
+    private TextView brushName;
+    private LinearLayout side;
+    private FrameLayout.LayoutParams sideLp;
     private LinearLayout panel, layerList;
     private SeekBar opacityBar;
     private File autosave;
@@ -65,40 +68,65 @@ public class MainActivity extends Activity {
         canvas.onChange = this::refreshPanel;
         canvas.onGreyPicked = this::updateColor;
 
-        // ---- Toolbar ----
-        LinearLayout bar = new LinearLayout(this);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding((int) (4 * dp), 0, (int) (4 * dp), 0);
-        brushBtn = button(bar, "", v -> { if (canvas.tool == CanvasView.DRAW) pickBrush(); else setTool(CanvasView.DRAW); });
-        eraseBtn = button(bar, "Erase", v -> { if (canvas.tool == CanvasView.ERASE) pickBrush(); else setTool(CanvasView.ERASE); });
-        moveBtn = button(bar, "Move", v -> setTool(CanvasView.MOVE));
-        colorBtn = button(bar, "", v -> pickGrey());
-        SeekBar sizeBar = new SeekBar(this);
-        sizeBar.setMax(149);
-        sizeBar.setProgress((int) canvas.size - 1);
-        sizeBar.setOnSeekBarChangeListener(new Slider() {
-            public void onProgressChanged(SeekBar s, int p, boolean u) { canvas.size = p + 1; }
-        });
-        bar.addView(sizeBar, new LinearLayout.LayoutParams((int) (130 * dp), -2));
-        button(bar, "Undo", v -> canvas.undo());
-        button(bar, "Redo", v -> canvas.redo());
-        button(bar, "Layers", v -> togglePanel());
-        button(bar, "Open", this::openMenu);
-        button(bar, "Export", this::exportMenu);
-        button(bar, "Fit", v -> canvas.animateFit());
-        button(bar, "Canvas", v -> canvasDialog());
+        // ---- Top bar: actions on the left, painting tools on the right ----
+        int ib = (int) (44 * dp);
+        LinearLayout left = new LinearLayout(this), right = new LinearLayout(this);
+        left.setGravity(Gravity.CENTER_VERTICAL);
+        right.setGravity(Gravity.CENTER_VERTICAL);
+        icon(left, Ui.MENU, ib, this::actionsMenu);
+        moveBtn = icon(left, Ui.MOVE, ib, v -> setTool(canvas.tool == CanvasView.MOVE ? CanvasView.DRAW : CanvasView.MOVE));
+        brushName = new TextView(this);
+        brushName.setTextColor(0xFF9A9A9E);
+        brushName.setTextSize(13);
+        brushName.setPadding(0, 0, (int) (6 * dp), 0);
+        brushName.setOnClickListener(v -> pickBrush());
+        right.addView(brushName);
+        brushBtn = icon(right, Ui.BRUSH, ib, v -> { if (canvas.tool == CanvasView.DRAW) pickBrush(); else setTool(CanvasView.DRAW); });
+        eraseBtn = icon(right, Ui.ERASER, ib, v -> { if (canvas.tool == CanvasView.ERASE) pickBrush(); else setTool(CanvasView.ERASE); });
+        layersBtn = icon(right, Ui.LAYERS, ib, v -> togglePanel());
+        colorBtn = icon(right, Ui.COLOR, ib, v -> pickGrey());
+        FrameLayout top = new FrameLayout(this);
+        top.setBackgroundColor(Ui.BAR);
+        top.addView(left, new FrameLayout.LayoutParams(-2, -1, Gravity.START));
+        top.addView(right, new FrameLayout.LayoutParams(-2, -1, Gravity.END));
+        View scroll = top; // hidden by four-finger tap
+
+        // ---- Sidebar: size, eyedropper, opacity, undo/redo ----
+        side = new LinearLayout(this);
+        side.setOrientation(LinearLayout.VERTICAL);
+        side.setGravity(Gravity.CENTER_HORIZONTAL);
+        android.graphics.drawable.GradientDrawable sbg = new android.graphics.drawable.GradientDrawable();
+        sbg.setColor(Ui.PANEL);
+        sbg.setCornerRadius(12 * dp);
+        side.setBackground(sbg);
+        side.setPadding(0, (int) (6 * dp), 0, (int) (6 * dp));
+        Ui.VSlider sizeS = new Ui.VSlider(this, (float) Math.sqrt((canvas.size - 1) / 149f));
+        sizeS.listener = (v, done) -> canvas.size = 1 + 149 * v * v; // finer control at small sizes
+        side.addView(sizeS, new LinearLayout.LayoutParams((int) (40 * dp), (int) (150 * dp)));
+        pickBtn = icon(side, Ui.PICK, (int) (40 * dp), v -> { canvas.pickNext = !canvas.pickNext; pickBtn.setOn(canvas.pickNext); });
+        Ui.VSlider opS = new Ui.VSlider(this, canvas.opacity);
+        opS.listener = (v, done) -> canvas.opacity = Math.max(0.01f, v);
+        side.addView(opS, new LinearLayout.LayoutParams((int) (40 * dp), (int) (150 * dp)));
+        icon(side, Ui.UNDO, (int) (40 * dp), v -> canvas.undo());
+        icon(side, Ui.REDO, (int) (40 * dp), v -> canvas.redo());
+        canvas.onPicked = () -> pickBtn.setOn(false);
         setTool(CanvasView.DRAW);
         updateBrush();
         updateColor();
 
-        HorizontalScrollView scroll = new HorizontalScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.addView(bar, new FrameLayout.LayoutParams(-2, -1));
-
         // ---- Layers panel ----
         panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setBackgroundColor(0xF0111111);
+        android.graphics.drawable.GradientDrawable pbg = new android.graphics.drawable.GradientDrawable();
+        pbg.setColor(Ui.PANEL);
+        pbg.setCornerRadius(12 * dp);
+        panel.setBackground(pbg);
+        TextView lt = new TextView(this);
+        lt.setText("Layers");
+        lt.setTextColor(Color.WHITE);
+        lt.setTextSize(17);
+        lt.setPadding((int) (6 * dp), 0, 0, (int) (4 * dp));
+        panel.addView(lt);
         panel.setPadding((int) (6 * dp), (int) (6 * dp), (int) (6 * dp), (int) (6 * dp));
         LinearLayout r1 = row(), r2 = row();
         button(r1, "+ New", v -> { if (!canvas.addLayer(canvas.newLayer("Layer " + (canvas.layers.size() + 1)))) full(); });
@@ -132,12 +160,17 @@ public class MainActivity extends Activity {
 
         FrameLayout stage = new FrameLayout(this);
         stage.addView(canvas);
-        stage.addView(panel, new FrameLayout.LayoutParams((int) (260 * dp), -1, Gravity.END));
+        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams((int) (280 * dp), (int) (460 * dp), Gravity.END | Gravity.TOP);
+        plp.setMargins(0, (int) (6 * dp), (int) (8 * dp), (int) (8 * dp));
+        stage.addView(panel, plp);
+        sideLp = new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL);
+        sideLp.setMargins((int) (6 * dp), 0, (int) (6 * dp), 0);
+        stage.addView(side, sideLp);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.BLACK);
-        root.addView(scroll, new LinearLayout.LayoutParams(-1, (int) (48 * dp)));
+        root.addView(top, new LinearLayout.LayoutParams(-1, ib));
         root.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1f));
         root.setOnApplyWindowInsetsListener((v, in) -> {
             Insets i = in.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
@@ -148,6 +181,7 @@ public class MainActivity extends Activity {
         canvas.onToggleUi = () -> { // four-finger tap: hide/show toolbar and panel
             boolean show = scroll.getVisibility() != View.VISIBLE;
             scroll.setVisibility(show ? View.VISIBLE : View.GONE);
+            side.setVisibility(show ? View.VISIBLE : View.GONE);
             if (!show) panel.setVisibility(View.GONE);
         };
 
@@ -324,9 +358,74 @@ public class MainActivity extends Activity {
 
     private void setTool(int t) {
         canvas.setTool(t);
-        highlight(brushBtn, t == CanvasView.DRAW);
-        highlight(eraseBtn, t == CanvasView.ERASE);
-        highlight(moveBtn, t == CanvasView.MOVE);
+        brushBtn.setOn(t == CanvasView.DRAW);
+        eraseBtn.setOn(t == CanvasView.ERASE);
+        moveBtn.setOn(t == CanvasView.MOVE);
+    }
+
+    private Ui.Icon icon(LinearLayout parent, int kind, int size, View.OnClickListener l) {
+        Ui.Icon i = new Ui.Icon(this, kind);
+        i.setOnClickListener(l);
+        parent.addView(i, new LinearLayout.LayoutParams(size, size));
+        return i;
+    }
+
+    /** Actions menu (top-left): files, canvas, settings, help. */
+    private void actionsMenu(View anchor) {
+        PopupMenu m = new PopupMenu(this, anchor);
+        android.view.Menu mm = m.getMenu();
+        mm.add(0, 1, 0, "Open file…");
+        mm.add(0, 2, 1, "Import image as layer…");
+        android.view.SubMenu ex = mm.addSubMenu(0, 3, 2, "Export / share as");
+        for (int i = 0; i < FORMATS.length; i++) ex.add(1, 100 + i, i, FORMATS[i]);
+        mm.add(0, 4, 3, "Canvas size…");
+        mm.add(0, 5, 4, "Fit to screen");
+        mm.add(0, 6, 5, "Import brushes…");
+        mm.add(0, 7, 6, "Sidebar on " + (sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL) ? "right" : "left"));
+        mm.add(0, 8, 7, "Gestures help");
+        m.setOnMenuItemClickListener(it -> {
+            int id = it.getItemId();
+            if (id >= 100) { startExport(id - 100); return true; }
+            switch (id) {
+                case 1: openDoc(REQ_OPEN); break;
+                case 2: openDoc(REQ_IMPORT); break;
+                case 4: canvasDialog(); break;
+                case 5: canvas.animateFit(); break;
+                case 6: openDoc(REQ_BRUSH); break;
+                case 7:
+                    sideLp.gravity = sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL)
+                            ? Gravity.END | Gravity.CENTER_VERTICAL : Gravity.START | Gravity.CENTER_VERTICAL;
+                    side.setLayoutParams(sideLp);
+                    break;
+                case 8:
+                    new AlertDialog.Builder(this).setTitle("Gestures").setMessage(
+                            "Two-finger tap: undo · hold: keep undoing\n"
+                          + "Three-finger tap: redo\n"
+                          + "Pinch / drag / twist: zoom, move, rotate\n"
+                          + "Quick pinch-in: fit to screen\n"
+                          + "Three-finger scrub: clear layer\n"
+                          + "Four-finger tap: full screen\n"
+                          + "Touch and hold: eyedropper\n"
+                          + "Draw and hold: QuickShape (line / ellipse)\n"
+                          + "Tap the active brush or eraser: brush library")
+                            .setPositiveButton("OK", null).show();
+                    break;
+            }
+            return true;
+        });
+        m.show();
+    }
+
+    private void openDoc(int req) {
+        startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), req);
+    }
+
+    private void startExport(int fmt) {
+        exportFormat = fmt;
+        startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                .setType(MIMES[fmt])
+                .putExtra(Intent.EXTRA_TITLE, "inkwell_" + System.currentTimeMillis() / 1000 + "." + EXTS[fmt]), REQ_EXPORT);
     }
 
     /** Brush list + brush opacity. Tap the active Brush/Erase button to open. */
@@ -387,13 +486,12 @@ public class MainActivity extends Activity {
         dlg[0] = new AlertDialog.Builder(this).setTitle("Brushes").setView(sv).setPositiveButton("Done", null).show();
     }
 
-    private void updateBrush() { brushBtn.setText(canvas.brush.name + " ▾"); }
+    private void updateBrush() { brushName.setText(canvas.brush.name); }
 
     private void updateColor() {
         int g = canvas.grey;
-        colorBtn.setText("Ink " + Math.round((255 - g) * 100 / 255f) + "%");
-        colorBtn.setBackgroundColor(Color.rgb(g, g, g));
-        colorBtn.setTextColor(g > 110 ? Color.BLACK : Color.WHITE);
+        colorBtn.grey = g;
+        colorBtn.invalidate();
     }
 
     /** Grey picker: slider (black..white) plus quick swatches. */
@@ -444,6 +542,7 @@ public class MainActivity extends Activity {
 
     private void togglePanel() {
         panel.setVisibility(panel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+        layersBtn.setOn(panel.getVisibility() == View.VISIBLE);
         refreshPanel();
     }
 

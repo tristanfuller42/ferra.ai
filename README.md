@@ -7,6 +7,11 @@ A tiny greyscale drawing app for Android (built for Pixel Fold). No libraries, p
 2. Allow "install unknown apps" for your browser when asked. Install.
 
 ## Use
+Layout matches Procreate so you can switch between the two easily:
+- **Top-left**: actions menu (open, import, export, canvas size, import brushes, sidebar side, gestures help) and Move.
+- **Top-right**: brush, eraser, layers, ink colour. Tap the active brush or eraser again for the brush library.
+- **Sidebar** (left, or right via the actions menu): brush size, eyedropper, brush opacity, undo, redo.
+
 - **Brush / Erase / Move**: pick a tool. **Ink** button picks any grey (slider + swatches, black to white). Slider = size.
 - **Brushes**: tap the active brush button (or Erase) again to pick a brush and set brush opacity.
   - Size only from pressure: Ink pen, Brush pen (strong taper), Fine liner (no pressure), Marker (see-through).

@@ -312,7 +312,8 @@ public class CanvasView extends View {
     // ---------- Input ----------
 
     // ---- Procreate-style extras ----
-    public Runnable onGreyPicked, onToggleUi;
+    public Runnable onGreyPicked, onToggleUi, onPicked;
+    public boolean pickNext; // eyedropper button armed
     private boolean picking, shaping, shapeClosed, holdUndoing, scrubbed;
     private float downSX, downSY, holdSX, holdSY, curX, curY, gScale = 1f;
     private float[] spts = new float[300];
@@ -417,6 +418,19 @@ public class CanvasView extends View {
         boolean isPen = type == MotionEvent.TOOL_TYPE_STYLUS || type == MotionEvent.TOOL_TYPE_ERASER;
         if (isPen) stylusSeen = true;
 
+        if (pickNext && action == MotionEvent.ACTION_DOWN) { // eyedropper button armed
+            pickNext = false;
+            picking = true;
+            stroking = false;
+            pickAt(e.getX(), e.getY());
+            if (onPicked != null) onPicked.run();
+            return true;
+        }
+        if (picking && !gesture) {
+            if (action == MotionEvent.ACTION_MOVE) pickAt(e.getX(), e.getY());
+            else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) picking = false;
+            return true;
+        }
         if (tool == MOVE) return handleGesture(e, action, moveT);
         if (e.getPointerCount() >= 2 || gesture || (stylusSeen && type == MotionEvent.TOOL_TYPE_FINGER))
             return handleGesture(e, action, view);
