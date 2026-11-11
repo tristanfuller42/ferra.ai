@@ -45,7 +45,8 @@ public class MainActivity extends Activity {
     private static final String[] EXTS = {"png", "jpg", "webp", "pdf", "psd"};
 
     private CanvasView canvas;
-    private Ui.Icon brushBtn, eraseBtn, moveBtn, colorBtn, layersBtn, pickBtn;
+    private Ui.Icon brushBtn, eraseBtn, moveBtn, colorBtn, layersBtn, pickBtn, smudgeBtn, adjustBtn, selectBtn;
+    private LinearLayout bottom;
     private TextView brushName;
     private LinearLayout side;
     private FrameLayout.LayoutParams sideLp;
@@ -74,6 +75,8 @@ public class MainActivity extends Activity {
         left.setGravity(Gravity.CENTER_VERTICAL);
         right.setGravity(Gravity.CENTER_VERTICAL);
         icon(left, Ui.MENU, ib, this::actionsMenu);
+        adjustBtn = icon(left, Ui.ADJUST, ib, this::adjustMenu);
+        selectBtn = icon(left, Ui.SELECT, ib, v -> setTool(canvas.tool == CanvasView.SELECT ? CanvasView.DRAW : CanvasView.SELECT));
         moveBtn = icon(left, Ui.MOVE, ib, v -> setTool(canvas.tool == CanvasView.MOVE ? CanvasView.DRAW : CanvasView.MOVE));
         brushName = new TextView(this);
         brushName.setTextColor(0xFF9A9A9E);
@@ -82,9 +85,11 @@ public class MainActivity extends Activity {
         brushName.setOnClickListener(v -> pickBrush());
         right.addView(brushName);
         brushBtn = icon(right, Ui.BRUSH, ib, v -> { if (canvas.tool == CanvasView.DRAW) pickBrush(); else setTool(CanvasView.DRAW); });
+        smudgeBtn = icon(right, Ui.SMUDGE, ib, v -> { if (canvas.tool == CanvasView.SMUDGE) pickBrush(); else setTool(CanvasView.SMUDGE); });
         eraseBtn = icon(right, Ui.ERASER, ib, v -> { if (canvas.tool == CanvasView.ERASE) pickBrush(); else setTool(CanvasView.ERASE); });
         layersBtn = icon(right, Ui.LAYERS, ib, v -> togglePanel());
         colorBtn = icon(right, Ui.COLOR, ib, v -> pickGrey());
+        colorBtn.setOnTouchListener(this::colorDropTouch);
         FrameLayout top = new FrameLayout(this);
         top.setBackgroundColor(Ui.BAR);
         top.addView(left, new FrameLayout.LayoutParams(-2, -1, Gravity.START));
@@ -110,6 +115,24 @@ public class MainActivity extends Activity {
         icon(side, Ui.UNDO, (int) (40 * dp), v -> canvas.undo());
         icon(side, Ui.REDO, (int) (40 * dp), v -> canvas.redo());
         canvas.onPicked = () -> pickBtn.setOn(false);
+        canvas.onCopyMenu = () -> {
+            PopupMenu m = new PopupMenu(this, canvas, Gravity.CENTER);
+            String[] items = {"Cut", "Copy", "Copy all", "Duplicate", "Cut & Paste", "Paste"};
+            for (int i = 0; i < items.length; i++) m.getMenu().add(0, i, i, items[i]).setEnabled(i != 5 || canvas.hasClipboard());
+            m.setOnMenuItemClickListener(it -> {
+                switch (it.getItemId()) {
+                    case 0: canvas.copy(false, true); break;
+                    case 1: canvas.copy(false, false); break;
+                    case 2: canvas.copy(true, false); break;
+                    case 3: if (!canvas.copyPaste(false)) full(); break;
+                    case 4: if (!canvas.copyPaste(true)) full(); break;
+                    case 5: if (!canvas.paste()) full(); break;
+                }
+                return true;
+            });
+            m.show();
+        };
+        canvas.onInfo = msg -> Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
         setTool(CanvasView.DRAW);
         updateBrush();
         updateColor();
@@ -166,6 +189,17 @@ public class MainActivity extends Activity {
         sideLp = new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL);
         sideLp.setMargins((int) (6 * dp), 0, (int) (6 * dp), 0);
         stage.addView(side, sideLp);
+        bottom = new LinearLayout(this);
+        bottom.setOrientation(LinearLayout.VERTICAL);
+        android.graphics.drawable.GradientDrawable bbg = new android.graphics.drawable.GradientDrawable();
+        bbg.setColor(Ui.PANEL);
+        bbg.setCornerRadius(12 * dp);
+        bottom.setBackground(bbg);
+        bottom.setPadding((int) (8 * dp), (int) (4 * dp), (int) (8 * dp), (int) (4 * dp));
+        bottom.setVisibility(View.GONE);
+        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        blp.setMargins((int) (8 * dp), 0, (int) (8 * dp), (int) (10 * dp));
+        stage.addView(bottom, blp);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -357,10 +391,400 @@ public class MainActivity extends Activity {
     }
 
     private void setTool(int t) {
+        if (canvas.adjusting()) finishAdjust(true);      // like Procreate: picking another tool applies
+        if (canvas.liquifying()) { canvas.endLiquify(true); }
         canvas.setTool(t);
         brushBtn.setOn(t == CanvasView.DRAW);
+        smudgeBtn.setOn(t == CanvasView.SMUDGE);
         eraseBtn.setOn(t == CanvasView.ERASE);
         moveBtn.setOn(t == CanvasView.MOVE);
+        selectBtn.setOn(t == CanvasView.SELECT);
+        adjustBtn.setOn(t == CanvasView.ADJUST || t == CanvasView.LIQUIFY || t == CanvasView.CLONE);
+        if (t == CanvasView.SELECT) showSelectBar();
+        else if (t == CanvasView.MOVE) showTransformBar();
+        else if (t != CanvasView.ADJUST && t != CanvasView.LIQUIFY && t != CanvasView.CLONE) bottom.setVisibility(View.GONE);
+    }
+
+    // ---------- Bottom context bar ----------
+
+    private LinearLayout barRow() {
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        return r;
+    }
+
+    private void showBar(View... rows) {
+        bottom.removeAllViews();
+        for (View v : rows) {
+            if (v instanceof LinearLayout && ((LinearLayout) v).getOrientation() == LinearLayout.HORIZONTAL) {
+                HorizontalScrollView hs = new HorizontalScrollView(this);
+                hs.setHorizontalScrollBarEnabled(false);
+                hs.addView(v);
+                bottom.addView(hs);
+            } else bottom.addView(v);
+        }
+        bottom.setVisibility(View.VISIBLE);
+    }
+
+    private TextView chip(LinearLayout row, String label, boolean on, View.OnClickListener l) {
+        TextView t = button(row, label, l);
+        t.setTextSize(14);
+        t.setLayoutParams(new LinearLayout.LayoutParams(-2, (int) (40 * dp)));
+        if (on) { t.setBackgroundColor(Ui.ACCENT); t.setTextColor(Color.WHITE); }
+        else t.setTextColor(0xFFE8E8E8);
+        return t;
+    }
+
+    private void showSelectBar() {
+        LinearLayout a = barRow(), b = barRow();
+        String[] kinds = {"Automatic", "Freehand", "Rectangle", "Ellipse"};
+        for (int i = 0; i < kinds.length; i++) {
+            int k = i;
+            chip(a, kinds[i], canvas.selKind == i, v -> { canvas.selKind = k; showSelectBar(); });
+        }
+        chip(b, canvas.selSubtract ? "− Subtract" : "+ Add", canvas.selSubtract, v -> { canvas.selSubtract = !canvas.selSubtract; showSelectBar(); });
+        chip(b, "Invert", false, v -> canvas.invertSelection());
+        chip(b, "Copy & Paste", false, v -> { if (!canvas.copyPaste(false)) full(); });
+        chip(b, "Cut & Paste", false, v -> { if (!canvas.copyPaste(true)) full(); });
+        chip(b, "Feather", false, v -> featherDialog());
+        chip(b, "Clear", false, v -> canvas.clearSelection());
+        showBar(a, b);
+    }
+
+    private void featherDialog() {
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(100);
+        sb.setProgress(10);
+        new AlertDialog.Builder(this).setTitle("Feather (pixels)").setView(sb)
+                .setPositiveButton("Apply", (d, w) -> canvas.featherSelection(Math.max(1, sb.getProgress()))).show();
+    }
+
+    private void showTransformBar() {
+        LinearLayout a = barRow();
+        chip(a, "Uniform", !canvas.distort, v -> { canvas.distort = false; showTransformBar(); canvas.invalidate(); });
+        chip(a, "Distort", canvas.distort, v -> { canvas.distort = true; canvas.beginMove(); showTransformBar(); });
+        chip(a, "Flip H", false, v -> canvas.flip(true));
+        chip(a, "Flip V", false, v -> canvas.flip(false));
+        chip(a, "Rotate 90°", false, v -> canvas.rotate90());
+        chip(a, "Reset", false, v -> canvas.resetTransform());
+        chip(a, "Done", false, v -> setTool(CanvasView.DRAW));
+        showBar(a);
+    }
+
+    // ---------- Adjustments ----------
+
+    /** An adjustment: parameter names, ranges and defaults, and how to build the effect from values. */
+    private static final class Adj {
+        final String name; final String[] params; final float[] min, max, def;
+        final java.util.function.Function<float[], CanvasView.AdjFn> fn;
+        Adj(String n, String[] p, float[] mn, float[] mx, float[] d, java.util.function.Function<float[], CanvasView.AdjFn> f) {
+            name = n; params = p; min = mn; max = mx; def = d; fn = f;
+        }
+    }
+
+    private Adj adj;
+    private float[] adjVals;
+    private SeekBar[] adjBars;
+    private float zoomCX, zoomCY, dragStart;
+    private Ui.CurveView curveView;
+
+    private Adj[] adjustments() {
+        int w = canvas.docW, h = canvas.docH;
+        return new Adj[]{
+            new Adj("Gaussian Blur", new String[]{"Radius"}, new float[]{0}, new float[]{60}, new float[]{0},
+                    v -> (s, o) -> { if (v[0] < 0.5f) System.arraycopy(s, 0, o, 0, s.length); else Fx.gaussian(s, o, w, h, v[0]); }),
+            new Adj("Motion Blur", new String[]{"Length", "Angle"}, new float[]{0, 0}, new float[]{200, 180}, new float[]{0, 0},
+                    v -> (s, o) -> { if (v[0] < 1) System.arraycopy(s, 0, o, 0, s.length); else Fx.motion(s, o, w, h, v[0], v[1]); }),
+            new Adj("Perspective Blur", new String[]{"Amount (tap canvas to set centre)"}, new float[]{0}, new float[]{1}, new float[]{0},
+                    v -> (s, o) -> { if (v[0] < 0.01f) System.arraycopy(s, 0, o, 0, s.length); else Fx.zoom(s, o, w, h, zoomCX, zoomCY, v[0]); }),
+            new Adj("Noise", new String[]{"Amount"}, new float[]{0}, new float[]{1}, new float[]{0},
+                    v -> (s, o) -> Fx.noise(s, o, v[0], 7)),
+            new Adj("Sharpen", new String[]{"Amount"}, new float[]{0}, new float[]{1}, new float[]{0},
+                    v -> (s, o) -> Fx.sharpen(s, o, w, h, v[0])),
+            new Adj("Bloom", new String[]{"Amount", "Radius"}, new float[]{0, 2}, new float[]{1, 80}, new float[]{0, 20},
+                    v -> (s, o) -> Fx.bloom(s, o, w, h, v[0], v[1])),
+            new Adj("Glitch", new String[]{"Amount"}, new float[]{0}, new float[]{1}, new float[]{0},
+                    v -> (s, o) -> Fx.glitch(s, o, w, h, v[0], 11)),
+            new Adj("Halftone", new String[]{"Dot size"}, new float[]{3}, new float[]{40}, new float[]{8},
+                    v -> (s, o) -> Fx.halftone(s, o, w, h, v[0])),
+            new Adj("Brightness / Contrast", new String[]{"Brightness", "Contrast"}, new float[]{-1, -0.95f}, new float[]{1, 0.95f}, new float[]{0, 0},
+                    v -> (s, o) -> Fx.lut(s, o, Fx.brightnessContrast(v[0], v[1]))),
+            new Adj("Curves", new String[0], new float[0], new float[0], new float[0],
+                    v -> { float[][] c = curveView.arrays(); int[] l = Fx.curve(c[0], c[1]); return (s, o) -> Fx.lut(s, o, l); }),
+            new Adj("Threshold", new String[]{"Level"}, new float[]{1}, new float[]{254}, new float[]{128},
+                    v -> (s, o) -> Fx.lut(s, o, Fx.threshold(Math.round(v[0])))),
+            new Adj("Posterize", new String[]{"Levels"}, new float[]{2}, new float[]{16}, new float[]{4},
+                    v -> (s, o) -> Fx.lut(s, o, Fx.posterize(Math.round(v[0])))),
+            new Adj("Invert", new String[0], new float[0], new float[0], new float[0],
+                    v -> (s, o) -> Fx.lut(s, o, Fx.invert())),
+        };
+    }
+
+    private void adjustMenu(View anchor) {
+        if (canvas.adjusting()) finishAdjust(true);
+        if (canvas.liquifying()) canvas.endLiquify(true);
+        PopupMenu m = new PopupMenu(this, anchor);
+        Adj[] all = adjustments();
+        for (int i = 0; i < all.length; i++) m.getMenu().add(0, i, i, all[i].name);
+        m.getMenu().add(0, 100, 100, "Liquify");
+        m.getMenu().add(0, 101, 101, "Clone");
+        m.setOnMenuItemClickListener(it -> {
+            int id = it.getItemId();
+            if (id == 100) startLiquify();
+            else if (id == 101) startClone();
+            else startAdjust(all[id]);
+            return true;
+        });
+        m.show();
+    }
+
+    private void startAdjust(Adj a) {
+        setTool(CanvasView.ADJUST);
+        adj = a;
+        adjVals = a.def.clone();
+        zoomCX = canvas.docW / 2f; zoomCY = canvas.docH / 2f;
+        canvas.beginAdjust();
+        TextView title = new TextView(this);
+        title.setText(a.name + (a.params.length > 0 ? "  ·  slide on canvas to adjust" : ""));
+        title.setTextColor(Color.WHITE);
+        title.setPadding(0, (int) (4 * dp), 0, (int) (4 * dp));
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(title);
+        adjBars = new SeekBar[a.params.length];
+        for (int i = 0; i < a.params.length; i++) {
+            int k = i;
+            TextView lab = new TextView(this);
+            lab.setText(a.params[i]);
+            lab.setTextColor(0xFF9A9A9E);
+            box.addView(lab);
+            SeekBar sb = new SeekBar(this);
+            sb.setMax(1000);
+            sb.setProgress(Math.round((a.def[i] - a.min[i]) / (a.max[i] - a.min[i]) * 1000));
+            sb.setOnSeekBarChangeListener(new Slider() {
+                public void onProgressChanged(SeekBar s, int p, boolean u) {
+                    adjVals[k] = a.min[k] + (a.max[k] - a.min[k]) * p / 1000f;
+                    canvas.previewAdjust(a.fn.apply(adjVals));
+                }
+            });
+            adjBars[i] = sb;
+            box.addView(sb, new LinearLayout.LayoutParams((int) (300 * dp), -2));
+        }
+        if (a.name.equals("Curves")) {
+            curveView = new Ui.CurveView(this);
+            curveView.listener = () -> canvas.previewAdjust(a.fn.apply(adjVals));
+            box.addView(curveView, new LinearLayout.LayoutParams((int) (220 * dp), (int) (220 * dp)));
+        }
+        LinearLayout btns = barRow();
+        chip(btns, "Reset", false, v -> {
+            if (curveView != null && a.name.equals("Curves")) curveView.reset();
+            for (int i = 0; i < adjBars.length; i++)
+                adjBars[i].setProgress(Math.round((a.def[i] - a.min[i]) / (a.max[i] - a.min[i]) * 1000));
+            canvas.previewAdjust(a.fn.apply(adjVals));
+        });
+        chip(btns, "Cancel", false, v -> finishAdjust(false));
+        chip(btns, "Apply", true, v -> finishAdjust(true));
+        showBar(box, btns);
+        canvas.onAdjustDrag = (f, done) -> {
+            if (adjBars.length == 0) return;
+            if (dragStart < 0) dragStart = adjBars[0].getProgress();
+            adjBars[0].setProgress(Math.max(0, Math.min(1000, Math.round(dragStart + f * 1000))));
+            if (done) dragStart = -1;
+        };
+        dragStart = -1;
+        canvas.onAdjustTap = (x, y) -> {
+            if (a.name.startsWith("Perspective")) { zoomCX = x; zoomCY = y; canvas.previewAdjust(a.fn.apply(adjVals)); }
+        };
+        canvas.previewAdjust(a.fn.apply(adjVals));
+    }
+
+    private void finishAdjust(boolean apply) {
+        if (!canvas.adjusting()) return;
+        canvas.endAdjust(apply ? adj.fn.apply(adjVals) : null);
+        bottom.setVisibility(View.GONE);
+        canvas.tool = CanvasView.DRAW;
+        setTool(CanvasView.DRAW);
+    }
+
+    private void startLiquify() {
+        setTool(CanvasView.LIQUIFY);
+        canvas.beginLiquify();
+        showLiquifyBar();
+    }
+
+    private void showLiquifyBar() {
+        LinearLayout modes = barRow();
+        String[] names = {"Push", "Twirl ↻", "Twirl ↺", "Pinch", "Expand", "Reconstruct"};
+        for (int i = 0; i < names.length; i++) {
+            int k = i;
+            chip(modes, names[i], canvas.liqMode == i, v -> { canvas.liqMode = k; showLiquifyBar(); });
+        }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        TextView sl = new TextView(this);
+        sl.setText("Size");
+        sl.setTextColor(0xFF9A9A9E);
+        box.addView(sl);
+        SeekBar size = new SeekBar(this);
+        size.setMax(500);
+        size.setProgress((int) canvas.liqSize);
+        size.setOnSeekBarChangeListener(new Slider() {
+            public void onProgressChanged(SeekBar s, int p, boolean u) { canvas.liqSize = Math.max(10, p); }
+        });
+        box.addView(size, new LinearLayout.LayoutParams((int) (300 * dp), -2));
+        TextView pl = new TextView(this);
+        pl.setText("Pressure");
+        pl.setTextColor(0xFF9A9A9E);
+        box.addView(pl);
+        SeekBar str = new SeekBar(this);
+        str.setMax(100);
+        str.setProgress(Math.round(canvas.liqStrength * 100));
+        str.setOnSeekBarChangeListener(new Slider() {
+            public void onProgressChanged(SeekBar s, int p, boolean u) { canvas.liqStrength = Math.max(0.02f, p / 100f); }
+        });
+        box.addView(str, new LinearLayout.LayoutParams((int) (300 * dp), -2));
+        LinearLayout btns = barRow();
+        chip(btns, "Reset", false, v -> canvas.liquifyResetAll());
+        chip(btns, "Cancel", false, v -> { canvas.endLiquify(false); setTool(CanvasView.DRAW); });
+        chip(btns, "Apply", true, v -> { canvas.endLiquify(true); setTool(CanvasView.DRAW); });
+        showBar(modes, box, btns);
+    }
+
+    private void startClone() {
+        setTool(CanvasView.CLONE);
+        canvas.cloneArmed = true;
+        LinearLayout a = barRow();
+        TextView t = new TextView(this);
+        t.setText("Clone: tap to set the source, then paint. ");
+        t.setTextColor(Color.WHITE);
+        a.addView(t);
+        chip(a, "Move source", false, v -> { canvas.cloneArmed = true; toast("Tap to set a new source"); });
+        chip(a, "Done", true, v -> setTool(CanvasView.DRAW));
+        showBar(a);
+    }
+
+    // ---------- ColorDrop: drag the colour circle onto the canvas to fill ----------
+
+    private float cdX, cdY;
+    private boolean cdDrag;
+
+    private boolean colorDropTouch(View v, android.view.MotionEvent e) {
+        switch (e.getActionMasked()) {
+            case android.view.MotionEvent.ACTION_DOWN: cdX = e.getRawX(); cdY = e.getRawY(); cdDrag = false; break;
+            case android.view.MotionEvent.ACTION_MOVE:
+                if (Math.hypot(e.getRawX() - cdX, e.getRawY() - cdY) > 24 * dp) cdDrag = true;
+                break;
+            case android.view.MotionEvent.ACTION_UP:
+                if (cdDrag) {
+                    int[] loc = new int[2];
+                    canvas.getLocationOnScreen(loc);
+                    canvas.colorDrop(e.getRawX() - loc[0], e.getRawY() - loc[1], 30);
+                    return true;
+                }
+                break;
+        }
+        return false; // let taps through to the colour picker
+    }
+
+    // ---------- Layer options (tap the selected layer) ----------
+
+    private void layerOptions(View anchor, int idx) {
+        CanvasView.Layer l = canvas.layers.get(idx);
+        PopupMenu m = new PopupMenu(this, anchor);
+        android.view.Menu mm = m.getMenu();
+        mm.add(0, 1, 0, "Rename");
+        mm.add(0, 2, 1, "Select");
+        mm.add(0, 3, 2, "Copy");
+        mm.add(0, 4, 3, "Fill layer");
+        mm.add(0, 5, 4, "Clear");
+        mm.add(0, 6, 5, "Alpha lock").setCheckable(true).setChecked(l.alphaLock);
+        mm.add(0, 7, 6, "Clipping mask").setCheckable(true).setChecked(l.clip);
+        mm.add(0, 8, 7, "Invert");
+        mm.add(0, 9, 8, "Merge down");
+        android.view.SubMenu bm = mm.addSubMenu(0, 10, 9, "Blend mode: " + CanvasView.BLEND_NAMES[l.blend]);
+        for (int i = 0; i < CanvasView.BLEND_NAMES.length; i++) bm.add(1, 100 + i, i, CanvasView.BLEND_NAMES[i]);
+        mm.add(0, 11, 10, "Delete");
+        m.setOnMenuItemClickListener(it -> {
+            int id = it.getItemId();
+            if (id >= 100) { canvas.setBlend(idx, id - 100); return true; }
+            switch (id) {
+                case 1: {
+                    android.widget.EditText et = new android.widget.EditText(this);
+                    et.setText(l.name);
+                    et.setSelectAllOnFocus(true);
+                    new AlertDialog.Builder(this).setTitle("Rename layer").setView(et)
+                            .setPositiveButton("OK", (d, w) -> canvas.rename(idx, et.getText().toString())).show();
+                    break;
+                }
+                case 2: canvas.selectLayer(); break;
+                case 3: if (!canvas.duplicate()) full(); break;
+                case 4: canvas.fillLayer(); break;
+                case 5: canvas.clearLayer(); break;
+                case 6: canvas.toggleAlphaLock(idx); break;
+                case 7: canvas.toggleClip(idx); break;
+                case 8: canvas.invertLayer(); break;
+                case 9: canvas.mergeDown(); break;
+                case 11: confirm("Delete this layer?", canvas::deleteLayer); break;
+            }
+            return true;
+        });
+        m.show();
+    }
+
+    private void blendMenu(View anchor, int idx) {
+        PopupMenu m = new PopupMenu(this, anchor);
+        for (int i = 0; i < CanvasView.BLEND_NAMES.length; i++) m.getMenu().add(0, i, i, CanvasView.BLEND_NAMES[i]);
+        m.setOnMenuItemClickListener(it -> { canvas.setBlend(idx, it.getItemId()); return true; });
+        m.show();
+    }
+
+    private void textDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int p = (int) (16 * dp);
+        box.setPadding(p, p, p, 0);
+        android.widget.EditText et = new android.widget.EditText(this);
+        et.setHint("Text");
+        et.setMinLines(2);
+        box.addView(et);
+        TextView sl = new TextView(this);
+        sl.setText("Size");
+        box.addView(sl);
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(400);
+        sb.setProgress(Math.max(24, canvas.docW / 12));
+        box.addView(sb);
+        android.widget.CheckBox bold = new android.widget.CheckBox(this);
+        bold.setText("Bold");
+        box.addView(bold);
+        new AlertDialog.Builder(this).setTitle("Add text").setView(box)
+                .setPositiveButton("Add", (d, w) -> {
+                    String t = et.getText().toString();
+                    if (t.trim().isEmpty()) return;
+                    if (!canvas.addTextLayer(t, Math.max(8, sb.getProgress()), bold.isChecked())) { full(); return; }
+                    setTool(CanvasView.MOVE);
+                    toast("Text added on a new layer. Drag to place it, then tap Done.");
+                })
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    private void guideMenu(View anchor) {
+        PopupMenu m = new PopupMenu(this, anchor);
+        String[] g = {"Off", "2D grid", "Symmetry: vertical", "Symmetry: horizontal", "Symmetry: quadrant", "Symmetry: radial (8)"};
+        for (int i = 0; i < g.length; i++) m.getMenu().add(0, i, i, (canvas.guide == i ? "✓ " : "") + g[i]);
+        m.setOnMenuItemClickListener(it -> {
+            canvas.guide = it.getItemId();
+            if (canvas.guide == 1) {
+                android.widget.EditText et = new android.widget.EditText(this);
+                et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+                et.setText(String.valueOf(canvas.gridSize));
+                new AlertDialog.Builder(this).setTitle("Grid size (pixels)").setView(et)
+                        .setPositiveButton("OK", (d, w) -> { canvas.gridSize = Math.max(8, parse(et)); canvas.invalidate(); }).show();
+            }
+            canvas.invalidate();
+            return true;
+        });
+        m.show();
     }
 
     private Ui.Icon icon(LinearLayout parent, int kind, int size, View.OnClickListener l) {
@@ -381,6 +805,8 @@ public class MainActivity extends Activity {
         mm.add(0, 4, 3, "Canvas size…");
         mm.add(0, 5, 4, "Fit to screen");
         mm.add(0, 6, 5, "Import brushes…");
+        mm.add(0, 9, 5, "Add text…");
+        mm.add(0, 10, 5, "Drawing guide / symmetry…");
         mm.add(0, 7, 6, "Sidebar on " + (sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL) ? "right" : "left"));
         mm.add(0, 8, 7, "Gestures help");
         m.setOnMenuItemClickListener(it -> {
@@ -392,6 +818,8 @@ public class MainActivity extends Activity {
                 case 4: canvasDialog(); break;
                 case 5: canvas.animateFit(); break;
                 case 6: openDoc(REQ_BRUSH); break;
+                case 9: textDialog(); break;
+                case 10: guideMenu(anchor); break;
                 case 7:
                     sideLp.gravity = sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL)
                             ? Gravity.END | Gravity.CENTER_VERTICAL : Gravity.START | Gravity.CENTER_VERTICAL;
@@ -404,10 +832,14 @@ public class MainActivity extends Activity {
                           + "Pinch / drag / twist: zoom, move, rotate\n"
                           + "Quick pinch-in: fit to screen\n"
                           + "Three-finger scrub: clear layer\n"
+                          + "Three-finger swipe down: copy & paste menu\n"
                           + "Four-finger tap: full screen\n"
                           + "Touch and hold: eyedropper\n"
                           + "Draw and hold: QuickShape (line / ellipse)\n"
-                          + "Tap the active brush or eraser: brush library")
+                          + "Tap the active brush, smudge or eraser: brush library\n"
+                          + "Drag the colour circle onto the canvas: fill (ColorDrop)\n"
+                          + "Tap the selected layer: layer options\n"
+                          + "In an adjustment: slide on the canvas to change the amount")
                             .setPositiveButton("OK", null).show();
                     break;
             }
@@ -567,18 +999,24 @@ public class MainActivity extends Activity {
             iv.setBackgroundColor(0xFF888888);
             r.addView(iv, new LinearLayout.LayoutParams(tw, th));
             TextView name = new TextView(this);
-            name.setText(l.name);
+            name.setText((l.clip ? "↳ " : "") + l.name + (l.alphaLock ? "  α" : ""));
             name.setTextColor(Color.WHITE);
             name.setSingleLine(true);
             name.setPadding((int) (8 * dp), 0, 0, 0);
             r.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView bl = new TextView(this);
+            bl.setText(CanvasView.BLEND_NAMES[l.blend].substring(0, 1));
+            bl.setTextColor(l.blend == 0 ? 0xFF9A9A9E : Ui.ACCENT);
+            bl.setPadding((int) (8 * dp), (int) (8 * dp), (int) (4 * dp), (int) (8 * dp));
+            bl.setOnClickListener(v -> blendMenu(v, idx));
+            r.addView(bl);
             TextView vis = new TextView(this);
             vis.setText(l.visible ? "Shown" : "Hidden");
             vis.setTextColor(l.visible ? Color.WHITE : 0xFF888888);
             vis.setPadding((int) (8 * dp), (int) (8 * dp), (int) (8 * dp), (int) (8 * dp));
             vis.setOnClickListener(v -> canvas.toggleVisible(idx));
             r.addView(vis);
-            r.setOnClickListener(v -> canvas.select(idx));
+            r.setOnClickListener(v -> { if (idx == canvas.current) layerOptions(v, idx); else canvas.select(idx); });
             layerList.addView(r);
         }
     }

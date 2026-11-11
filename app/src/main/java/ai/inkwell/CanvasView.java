@@ -8,7 +8,9 @@ import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
+import android.graphics.Path;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -28,14 +30,24 @@ import java.util.zip.Inflater;
 public class CanvasView extends View {
     public static final int MAX_UNDO = 100;
     private static final long MAX_HISTORY_BYTES = 96L << 20;
-    public static final int DRAW = 0, ERASE = 1, MOVE = 2;
+    public static final int DRAW = 0, ERASE = 1, MOVE = 2, SMUDGE = 3, SELECT = 4, CLONE = 5, LIQUIFY = 6, ADJUST = 7;
+
+    public static final String[] BLEND_NAMES = {"Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten",
+            "Colour burn", "Colour dodge", "Hard light", "Soft light", "Difference", "Add"};
+    static final android.graphics.BlendMode[] BLENDS = {
+            android.graphics.BlendMode.SRC_OVER, android.graphics.BlendMode.MULTIPLY, android.graphics.BlendMode.SCREEN,
+            android.graphics.BlendMode.OVERLAY, android.graphics.BlendMode.DARKEN, android.graphics.BlendMode.LIGHTEN,
+            android.graphics.BlendMode.COLOR_BURN, android.graphics.BlendMode.COLOR_DODGE, android.graphics.BlendMode.HARD_LIGHT,
+            android.graphics.BlendMode.SOFT_LIGHT, android.graphics.BlendMode.DIFFERENCE, android.graphics.BlendMode.PLUS};
 
     public static final class Layer {
         public Bitmap bmp, thumb;
         public String name;
         public int opacity = 255;
-        public boolean visible = true, dirty = true;
+        public boolean visible = true, dirty = true, alphaLock, clip;
+        public int blend;
         public Layer(Bitmap b, String n) { bmp = b; name = n; }
+        void copyProps(Layer o) { opacity = o.opacity; visible = o.visible; alphaLock = o.alphaLock; clip = o.clip; blend = o.blend; }
     }
 
     interface Edit { void undo(); void redo(); long bytes(); }
@@ -145,6 +157,33 @@ public class CanvasView extends View {
     public Brush brush = BRUSHES.get(0);
     public float opacity = 1f;
 
+    // Selection (null = nothing selected = everything editable)
+    public byte[] sel;
+    public int selKind = 1;            // 0 automatic, 1 freehand, 2 rectangle, 3 ellipse
+    public boolean selSubtract;
+    private Bitmap selOverlay;
+    private Path selPath;
+    private float selX0, selY0, autoSX;
+    private int autoThr = 30;
+    public java.util.function.Consumer<String> onInfo;
+
+    // Transform (Move tool)
+    private Bitmap floatBmp;
+    private final Matrix poly = new Matrix();
+    private float[] srcCorners = new float[8], dstCorners = new float[8];
+    public boolean distort;
+    private int dragHandle = -1;
+
+    // Smudge / clone
+    private boolean smudging, cloning;
+    private float smX, smY, cloneSrcX, cloneSrcY, cloneOX, cloneOY;
+    private boolean cloneSet, cloneOffSet;
+    public boolean cloneArmed;
+    private int[] dab = new int[1024], buf2 = new int[1024];
+
+    // Drawing guides: 0 off, 1 grid, 2 vertical, 3 horizontal, 4 quadrant, 5 radial symmetry
+    public int guide, gridSize = 100;
+
     // Stroke state
     private byte[] mask = new byte[0];
     private int[] buf = new int[4096];
@@ -183,6 +222,7 @@ public class CanvasView extends View {
         backup = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         backupCanvas = new Canvas(backup);
         mask = new byte[w * h];
+        sel = null; selOverlay = null; floatBmp = null; adjSrc = null; liqSrc = null; cloneSet = false;
         syncBackup();
         if (getWidth() > 0) fit();
         changed();
@@ -200,8 +240,7 @@ public class CanvasView extends View {
         m.postTranslate((w - docW * s) / 2f, (h - docH * s) / 2f);
         for (Layer l : layers) {
             Layer n = new Layer(Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888), l.name);
-            n.opacity = l.opacity;
-            n.visible = l.visible;
+            n.copyProps(l);
             new Canvas(n.bmp).drawBitmap(l.bmp, m, p);
             l.bmp.recycle();
             out.add(n);
@@ -279,7 +318,7 @@ public class CanvasView extends View {
         va.start();
     }
 
-    /** Move-tool transform expressed in canvas coordinates. */
+    /** Screen-space gesture transform (moveT) expressed in canvas coordinates. */
     private Matrix layerMatrix() {
         view.invert(inverse);
         tmpM.set(view);
@@ -288,31 +327,131 @@ public class CanvasView extends View {
         return tmpM;
     }
 
+    /** Full move transform in canvas coordinates: distort (poly) then gesture. */
+    private Matrix transformMatrix() {
+        Matrix m = new Matrix(poly);
+        m.postConcat(layerMatrix());
+        return m;
+    }
+
+    /** Screen positions of the 4 transform-box corners. */
+    private float[] handlePoints() {
+        float[] q = srcCorners.clone();
+        Matrix m = transformMatrix();
+        m.postConcat(view);
+        m.mapPoints(q);
+        return q;
+    }
+
+    /** Draws all layers with blend modes and clipping masks. live = include move preview. */
+    private void render(Canvas c, boolean live) {
+        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
+        for (int i = 0; i < layers.size(); i++) {
+            Layer l = layers.get(i);
+            if (l.clip && i > 0) continue; // drawn with its base layer
+            int j = i + 1;
+            while (j < layers.size() && layers.get(j).clip) j++;
+            if (!l.visible) { i = j - 1; continue; }
+            p.setAlpha(l.opacity);
+            p.setBlendMode(BLENDS[l.blend]);
+            if (j == i + 1) drawLayer(c, i, p, live);
+            else {
+                c.saveLayer(0, 0, docW, docH, p);
+                drawLayer(c, i, new Paint(Paint.FILTER_BITMAP_FLAG), live);
+                for (int k = i + 1; k < j; k++) {
+                    Layer cl = layers.get(k);
+                    if (!cl.visible) continue;
+                    Paint a = new Paint(Paint.FILTER_BITMAP_FLAG);
+                    a.setAlpha(cl.opacity);
+                    a.setBlendMode(android.graphics.BlendMode.SRC_ATOP);
+                    drawLayer(c, k, a, live);
+                }
+                c.restore();
+                i = j - 1;
+            }
+        }
+    }
+
+    private void drawLayer(Canvas c, int i, Paint p, boolean live) {
+        c.drawBitmap(layers.get(i).bmp, 0, 0, p);
+        if (live && i == current && moving && floatBmp != null) {
+            c.save();
+            c.concat(transformMatrix());
+            c.drawBitmap(floatBmp, 0, 0, p);
+            c.restore();
+        }
+    }
+
     @Override
     protected void onDraw(Canvas c) {
         if (docW == 0) return;
+        float sc = view.mapRadius(1f);
         c.save();
         c.concat(view);
         c.clipRect(0, 0, docW, docH);
         c.drawRect(0, 0, docW, docH, paper);
-        for (int i = 0; i < layers.size(); i++) {
-            Layer l = layers.get(i);
-            if (!l.visible) continue;
-            layerPaint.setAlpha(l.opacity);
-            if (i == current && moving) {
-                c.save();
-                c.concat(layerMatrix());
-                c.drawBitmap(l.bmp, 0, 0, layerPaint);
-                c.restore();
-            } else c.drawBitmap(l.bmp, 0, 0, layerPaint);
+        render(c, true);
+        Paint g = new Paint(Paint.ANTI_ALIAS_FLAG);
+        g.setStyle(Paint.Style.STROKE);
+        g.setStrokeWidth(1.5f / sc);
+        if (guide == 1) { // grid
+            g.setColor(0x553D9BFF);
+            for (int x = gridSize; x < docW; x += gridSize) c.drawLine(x, 0, x, docH, g);
+            for (int y = gridSize; y < docH; y += gridSize) c.drawLine(0, y, docW, y, g);
+        } else if (guide >= 2) { // symmetry axes
+            g.setColor(0xAA3D9BFF);
+            float cx = docW / 2f, cy = docH / 2f;
+            if (guide == 2 || guide == 4) c.drawLine(cx, 0, cx, docH, g);
+            if (guide == 3 || guide == 4) c.drawLine(0, cy, docW, cy, g);
+            if (guide == 5) for (int k = 0; k < 4; k++) {
+                double a = Math.PI * k / 4, r = Math.hypot(docW, docH);
+                c.drawLine(cx - (float) (Math.cos(a) * r), cy - (float) (Math.sin(a) * r), cx + (float) (Math.cos(a) * r), cy + (float) (Math.sin(a) * r), g);
+            }
+        }
+        if (selOverlay != null) { // dim what is NOT selected
+            Paint o = new Paint(Paint.FILTER_BITMAP_FLAG);
+            o.setColor(0x663D9BFF);
+            c.drawBitmap(selOverlay, 0, 0, o);
+        }
+        if (selPath != null) {
+            g.setColor(0xFF3D9BFF);
+            g.setStrokeWidth(2f / sc);
+            c.drawPath(selPath, g);
+        }
+        if (tool == CLONE && cloneSet) {
+            float x = cloneSrcX, y = cloneSrcY;
+            if (stroking && cloneOffSet) { x = curX + cloneOX; y = curY + cloneOY; }
+            g.setColor(0xFF3D9BFF);
+            g.setStrokeWidth(2f / sc);
+            c.drawCircle(x, y, Math.max(size / 2, 8 / sc), g);
+            c.drawLine(x - 12 / sc, y, x + 12 / sc, y, g);
+            c.drawLine(x, y - 12 / sc, x, y + 12 / sc, g);
         }
         c.restore();
+        if (tool == MOVE && moving) { // transform box + handles (screen space)
+            float[] q = handlePoints();
+            g.setStrokeWidth(1.5f);
+            g.setColor(0xFF3D9BFF);
+            Path box = new Path();
+            box.moveTo(q[0], q[1]); box.lineTo(q[2], q[3]); box.lineTo(q[4], q[5]); box.lineTo(q[6], q[7]); box.close();
+            c.drawPath(box, g);
+            float hr = 9 * getResources().getDisplayMetrics().density;
+            for (int k = 0; k < 4; k++) {
+                g.setStyle(Paint.Style.FILL);
+                g.setColor(distort ? 0xFF3D9BFF : Color.WHITE);
+                c.drawCircle(q[k * 2], q[k * 2 + 1], hr, g);
+                g.setStyle(Paint.Style.STROKE);
+                g.setColor(0xFF3D9BFF);
+                c.drawCircle(q[k * 2], q[k * 2 + 1], hr, g);
+            }
+        }
     }
 
     // ---------- Input ----------
 
     // ---- Procreate-style extras ----
-    public Runnable onGreyPicked, onToggleUi, onPicked;
+    public Runnable onGreyPicked, onToggleUi, onPicked, onCopyMenu;
+    private float gSwipeY;
     public boolean pickNext; // eyedropper button armed
     private boolean picking, shaping, shapeClosed, holdUndoing, scrubbed;
     private float downSX, downSY, holdSX, holdSY, curX, curY, gScale = 1f;
@@ -431,15 +570,32 @@ public class CanvasView extends View {
             else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) picking = false;
             return true;
         }
-        if (tool == MOVE) return handleGesture(e, action, moveT);
-        if (e.getPointerCount() >= 2 || gesture || (stylusSeen && type == MotionEvent.TOOL_TYPE_FINGER))
-            return handleGesture(e, action, view);
+        if (tool == MOVE) {
+            if (distort && e.getPointerCount() == 1 && !gesture && handleDrag(e, action)) return true;
+            return handleGesture(e, action, moveT);
+        }
+        if (e.getPointerCount() >= 2 || gesture) return handleGesture(e, action, view);
+        if (tool == SELECT) return selectTouch(e, action);
+        if (tool == ADJUST) return adjustTouch(e, action);
+        if (stylusSeen && type == MotionEvent.TOOL_TYPE_FINGER) return handleGesture(e, action, view);
+        if (tool == LIQUIFY) return liquifyTouch(e, action);
+        if (tool == CLONE && action == MotionEvent.ACTION_DOWN && (!cloneSet || cloneArmed)) {
+            view.invert(inverse);
+            map(e.getX(), e.getY());
+            cloneSrcX = pt[0]; cloneSrcY = pt[1];
+            cloneSet = true; cloneArmed = false; cloneOffSet = false;
+            if (onInfo != null) onInfo.accept("Source set. Now paint to clone.");
+            invalidate();
+            return true;
+        }
 
         view.invert(inverse);
         switch (action) {
             case MotionEvent.ACTION_DOWN:
                 erasing = tool == ERASE || type == MotionEvent.TOOL_TYPE_ERASER
                         || (e.getButtonState() & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0;
+                smudging = tool == SMUDGE && !erasing;
+                cloning = tool == CLONE && !erasing;
                 penInput = isPen;
                 stroking = true;
                 picking = shaping = false;
@@ -447,6 +603,8 @@ public class CanvasView extends View {
                 sn = 0; pathLen = 0;
                 downSX = holdSX = e.getX(); downSY = holdSY = e.getY();
                 map(e.getX(), e.getY());
+                if (cloning && !cloneOffSet) { cloneOX = cloneSrcX - pt[0]; cloneOY = cloneSrcY - pt[1]; cloneOffSet = true; }
+                smX = pt[0]; smY = pt[1];
                 addPt(pt[0], pt[1], e.getPressure());
                 startAt(pt[0], pt[1], e.getPressure());
                 flush();
@@ -524,7 +682,25 @@ public class CanvasView extends View {
         lx = x; ly = y; lp = p;
     }
 
+    /** Stamps a dab plus its mirror copies when symmetry is on. */
     private void stamp(float cx, float cy, float p) {
+        stampOne(cx, cy, p);
+        if (smudging || guide < 2) return;
+        float mx = docW - cx, my = docH - cy;
+        if (guide == 2) stampOne(mx, cy, p);
+        else if (guide == 3) stampOne(cx, my, p);
+        else if (guide == 4) { stampOne(mx, cy, p); stampOne(cx, my, p); stampOne(mx, my, p); }
+        else if (guide == 5) {
+            float ox = cx - docW / 2f, oy = cy - docH / 2f;
+            for (int k = 1; k < 8; k++) {
+                double a = Math.PI * k / 4;
+                float c = (float) Math.cos(a), s = (float) Math.sin(a);
+                stampOne(docW / 2f + ox * c - oy * s, docH / 2f + ox * s + oy * c, p);
+            }
+        }
+    }
+
+    private void stampOne(float cx, float cy, float p) {
         Brush b = brush;
         float r = diameter(p) / 2f;
         float pr = pres(p);
@@ -534,6 +710,11 @@ public class CanvasView extends View {
         int x0 = Math.max(0, (int) (cx - r - 1)), x1 = Math.min(docW - 1, (int) (cx + r + 1));
         int y0 = Math.max(0, (int) (cy - r - 1)), y1 = Math.min(docH - 1, (int) (cy + r + 1));
         if (x0 > x1 || y0 > y1) return;
+        int bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+        if (smudging) {
+            if (dab.length < bw * bh) dab = new int[bw * bh];
+            java.util.Arrays.fill(dab, 0, bw * bh, 0);
+        }
         float grain = b.grain;
         // Tip image: pick the mip level closest to the stamp size
         byte[] tip = null; int tw = 0, th = 0; float sc = 0, ox = 0, oy = 0;
@@ -565,8 +746,13 @@ public class CanvasView extends View {
                     c *= 1 - grain + grain * g / 255f;
                 }
                 int v = (int) (a * c);
-                if (v > (mask[row + x] & 255)) mask[row + x] = (byte) v;
+                if (smudging) dab[(y - y0) * bw + (x - x0)] = v;
+                else if (v > (mask[row + x] & 255)) mask[row + x] = (byte) v;
             }
+        }
+        if (smudging) {
+            smudgeDab(x0, y0, bw, bh, Math.round(smX - cx), Math.round(smY - cy));
+            smX = cx; smY = cy;
         }
         if (eventDirty.isEmpty()) eventDirty.set(x0, y0, x1 + 1, y1 + 1);
         else eventDirty.union(x0, y0, x1 + 1, y1 + 1);
@@ -576,19 +762,41 @@ public class CanvasView extends View {
     private void flush() {
         Rect r = eventDirty;
         if (r.isEmpty()) return;
+        if (smudging) { // smudge writes the layer directly
+            if (strokeDirty.isEmpty()) strokeDirty.set(r); else strokeDirty.union(r);
+            r.setEmpty();
+            cur().dirty = true;
+            invalidate();
+            return;
+        }
         int w = r.width(), h = r.height();
         if (buf.length < w * h) buf = new int[w * h];
         backup.getPixels(buf, 0, w, r.left, r.top, w, h);
+        int[] cl = cloning ? cloneBlock(r) : null;
+        boolean lock = cur().alphaLock;
+        byte[] sm = sel;
         int ink = grey;
         for (int y = 0; y < h; y++) {
             int mrow = (r.top + y) * docW + r.left, brow = y * w;
             for (int x = 0; x < w; x++) {
                 int m = mask[mrow + x] & 255;
+                if (sm != null) m = m * (sm[mrow + x] & 255) / 255;
                 if (m == 0) continue;
                 int px = buf[brow + x];
                 int A = px >>> 24, G = px & 255;
                 int nA, nG;
-                if (erasing) { nA = A * (255 - m) / 255; nG = G; }
+                if (erasing) { if (lock) continue; nA = A * (255 - m) / 255; nG = G; }
+                else if (cl != null) {
+                    int cp = cl[brow + x], Ac = cp >>> 24, Gc = cp & 255;
+                    int sa = Ac * m / 255;
+                    if (lock) { nA = A; nG = G + (Gc - G) * sa / 255; }
+                    else {
+                        int keep = A * (255 - sa) / 255;
+                        nA = sa + keep;
+                        nG = nA == 0 ? 0 : (Gc * sa + G * keep) / nA;
+                    }
+                }
+                else if (lock) { nA = A; nG = G + (ink - G) * m / 255; }
                 else {
                     int keep = A * (255 - m) / 255;
                     nA = m + keep;
@@ -615,6 +823,59 @@ public class CanvasView extends View {
 
     private static int px(byte[] t, int w, int h, int x, int y) {
         return x < 0 || y < 0 || x >= w || y >= h ? 0 : t[y * w + x] & 255;
+    }
+
+    /** Pixels of the pre-stroke layer at the clone offset, for the rectangle r. */
+    private int[] cloneBlock(Rect r) {
+        int w = r.width(), h = r.height();
+        if (buf2.length < w * h) buf2 = new int[w * h];
+        java.util.Arrays.fill(buf2, 0, w * h, 0);
+        Rect sr = new Rect(r);
+        sr.offset(Math.round(cloneOX), Math.round(cloneOY));
+        Rect ir = new Rect(sr);
+        if (ir.intersect(0, 0, docW, docH)) {
+            int iw = ir.width(), ih = ir.height();
+            int[] t = new int[iw * ih];
+            backup.getPixels(t, 0, iw, ir.left, ir.top, iw, ih);
+            for (int y = 0; y < ih; y++)
+                System.arraycopy(t, y * iw, buf2, (ir.top - sr.top + y) * w + (ir.left - sr.left), iw);
+        }
+        return buf2;
+    }
+
+    /** Smudge: pulls pixels from the previous dab position (offset dx,dy) into this dab. */
+    private void smudgeDab(int x0, int y0, int bw, int bh, int dx, int dy) {
+        if (dx == 0 && dy == 0) return;
+        Bitmap L = cur().bmp;
+        int n = bw * bh;
+        int[] dst = new int[n], src = new int[n];
+        L.getPixels(dst, 0, bw, x0, y0, bw, bh);
+        System.arraycopy(dst, 0, src, 0, n);
+        Rect sr = new Rect(x0 + dx, y0 + dy, x0 + dx + bw, y0 + dy + bh);
+        Rect ir = new Rect(sr);
+        if (ir.intersect(0, 0, docW, docH)) {
+            int iw = ir.width(), ih = ir.height();
+            int[] t = new int[iw * ih];
+            L.getPixels(t, 0, iw, ir.left, ir.top, iw, ih);
+            for (int y = 0; y < ih; y++)
+                System.arraycopy(t, y * iw, src, (ir.top - sr.top + y) * bw + (ir.left - sr.left), iw);
+        }
+        byte[] sm = sel;
+        for (int y = 0; y < bh; y++)
+            for (int x = 0; x < bw; x++) {
+                int i = y * bw + x;
+                int v = dab[i];
+                if (sm != null) v = v * (sm[(y0 + y) * docW + x0 + x] & 255) / 255;
+                if (v == 0) continue;
+                int d = dst[i], sp = src[i];
+                int aD = d >>> 24, aS = sp >>> 24;
+                int na = aD + (aS - aD) * v / 255;
+                int pg = (d & 255) * aD + ((sp & 255) * aS - (d & 255) * aD) * v / 255;
+                dst[i] = Fx.pix(na, na == 0 ? 0 : Fx.clamp(pg / na));
+            }
+        L.setPixels(dst, 0, bw, x0, y0, bw, bh);
+        if (eventDirty.isEmpty()) eventDirty.set(x0, y0, x0 + bw, y0 + bh);
+        else eventDirty.union(x0, y0, x0 + bw, y0 + bh);
     }
 
     private void clearMask(Rect r) {
@@ -657,13 +918,16 @@ public class CanvasView extends View {
             removeCallbacks(shapeHold);
             removeCallbacks(pickHold);
             abortStroke();
-            if (target == moveT) moving = true;
+            if (target == moveT) beginMove();
+            if (selPath != null) { selPath = null; invalidate(); }
+            liqDown = false;
             gStart = e.getEventTime();
             gMoved = 0;
             gScale = 1f;
             gMax = gCount;
             holdUndoing = scrubbed = picking = false;
             scrubDir = scrubFlips = 0;
+            gSwipeY = 0;
             reset(e, -1);
             scrubX = gX;
             downSX = e.getX(); downSY = e.getY();
@@ -692,6 +956,11 @@ public class CanvasView extends View {
                         else if (Math.abs(m[0] - scrubX) > 40) { scrubFlips++; scrubDir = dir; scrubX = m[0]; }
                     }
                     if (scrubFlips >= 3 && !scrubbed) { scrubbed = true; clearLayer(); }
+                    gSwipeY += dy;
+                    if (!scrubbed && scrubFlips == 0 && gSwipeY > 120 * getResources().getDisplayMetrics().density) {
+                        scrubbed = true; // three-finger swipe down: copy & paste menu
+                        if (onCopyMenu != null) onCopyMenu.run();
+                    }
                 } else {
                     target.postTranslate(dx, dy);
                     if (gDist > 0 && m[2] > 0) {
@@ -757,25 +1026,644 @@ public class CanvasView extends View {
 
     // ---------- Commands ----------
 
-    /** Bakes a pending move/scale/rotate into the layer pixels. */
+    // ---------- Transform ----------
+
+    /** Lifts the selection (or whole layer) into a floating bitmap for transforming. */
+    public void beginMove() {
+        if (moving) return;
+        moving = true;
+        Layer l = cur();
+        push(new PixelEdit(l, new Rect(0, 0, docW, docH)));
+        int n = docW * docH;
+        int[] px = new int[n], fl = new int[n];
+        l.bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+        int minX = docW, minY = docH, maxX = -1, maxY = -1;
+        for (int i = 0; i < n; i++) {
+            int m = sel == null ? 255 : sel[i] & 255;
+            int a = px[i] >>> 24;
+            if (m == 0 || a == 0) { fl[i] = 0; continue; }
+            int fa = a * m / 255;
+            fl[i] = (fa << 24) | (px[i] & 0xFFFFFF);
+            px[i] = ((a - fa) << 24) | (px[i] & 0xFFFFFF);
+            if (fa > 0) {
+                int x = i % docW, y = i / docW;
+                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                if (y < minY) minY = y; if (y > maxY) maxY = y;
+            }
+        }
+        if (maxX < 0) { minX = 0; minY = 0; maxX = docW - 1; maxY = docH - 1; }
+        floatBmp = Bitmap.createBitmap(docW, docH, Bitmap.Config.ARGB_8888);
+        floatBmp.setPixels(fl, 0, docW, 0, 0, docW, docH);
+        l.bmp.setPixels(px, 0, docW, 0, 0, docW, docH);
+        srcCorners = new float[]{minX, minY, maxX + 1, minY, maxX + 1, maxY + 1, minX, maxY + 1};
+        dstCorners = srcCorners.clone();
+        poly.reset();
+        moveT.reset();
+        invalidate();
+    }
+
+    /** Bakes a pending move/scale/rotate/distort into the layer pixels. */
     public void commitMove() {
         if (!moving) return;
         moving = false;
         Layer l = cur();
-        Matrix m = new Matrix(layerMatrix());
+        Matrix m = transformMatrix();
+        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+        if (floatBmp != null) {
+            new Canvas(l.bmp).drawBitmap(floatBmp, m, p);
+            floatBmp.recycle();
+            floatBmp = null;
+        }
+        if (sel != null) { // selection moves with its content
+            Bitmap a = bytesToA8(sel, false), b = Bitmap.createBitmap(docW, docH, Bitmap.Config.ALPHA_8);
+            new Canvas(b).drawBitmap(a, m, p);
+            sel = a8ToBytes(b);
+            a.recycle(); b.recycle();
+            updateSelOverlay();
+        }
         moveT.reset();
-        if (m.isIdentity()) { invalidate(); return; }
-        push(new PixelEdit(l, new Rect(0, 0, docW, docH)));
-        Bitmap src = l.bmp.copy(Bitmap.Config.ARGB_8888, false);
-        l.bmp.eraseColor(0);
-        new Canvas(l.bmp).drawBitmap(src, m, new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG));
-        src.recycle();
+        poly.reset();
+        dragHandle = -1;
         l.dirty = true;
         syncBackup();
         changed();
     }
 
-    public void setTool(int t) { commitMove(); tool = t; }
+    private float[] contentCentre() {
+        float[] q = handlePoints();
+        return new float[]{(q[0] + q[4]) / 2, (q[1] + q[5]) / 2};
+    }
+
+    public void flip(boolean horizontal) {
+        if (tool != MOVE) return;
+        beginMove();
+        float[] c = contentCentre();
+        moveT.postScale(horizontal ? -1 : 1, horizontal ? 1 : -1, c[0], c[1]);
+        invalidate();
+    }
+
+    public void rotate90() {
+        if (tool != MOVE) return;
+        beginMove();
+        float[] c = contentCentre();
+        moveT.postRotate(90, c[0], c[1]);
+        invalidate();
+    }
+
+    public void resetTransform() {
+        if (!moving) return;
+        moveT.reset();
+        poly.reset();
+        dstCorners = srcCorners.clone();
+        invalidate();
+    }
+
+    /** Distort mode: drag a corner handle. Returns false if the touch isn't on a handle. */
+    private boolean handleDrag(MotionEvent e, int action) {
+        if (action == MotionEvent.ACTION_DOWN) {
+            beginMove();
+            float[] q = handlePoints();
+            float best = 32 * getResources().getDisplayMetrics().density;
+            dragHandle = -1;
+            for (int k = 0; k < 4; k++) {
+                float d = (float) Math.hypot(e.getX() - q[k * 2], e.getY() - q[k * 2 + 1]);
+                if (d < best) { best = d; dragHandle = k; }
+            }
+            return dragHandle >= 0;
+        }
+        if (dragHandle < 0) return false;
+        if (action == MotionEvent.ACTION_MOVE) {
+            // corner k must land under the finger: dst = U^-1(finger in canvas coords)
+            Matrix u = new Matrix(layerMatrix()), ui = new Matrix();
+            u.invert(ui);
+            view.invert(inverse);
+            float[] f = {e.getX(), e.getY()};
+            inverse.mapPoints(f);
+            ui.mapPoints(f);
+            dstCorners[dragHandle * 2] = f[0];
+            dstCorners[dragHandle * 2 + 1] = f[1];
+            poly.setPolyToPoly(srcCorners, 0, dstCorners, 0, 4);
+            invalidate();
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) dragHandle = -1;
+        return true;
+    }
+
+    public void setTool(int t) {
+        commitMove();
+        if (t != CLONE) cloneArmed = false;
+        tool = t;
+        invalidate();
+    }
+
+    // ---------- Selection ----------
+
+    private Bitmap bytesToA8(byte[] b, boolean invert) {
+        Bitmap bm = Bitmap.createBitmap(docW, docH, Bitmap.Config.ALPHA_8);
+        int rb = bm.getRowBytes();
+        byte[] rows = new byte[rb * docH];
+        for (int y = 0; y < docH; y++)
+            for (int x = 0; x < docW; x++) {
+                byte v = b[y * docW + x];
+                rows[y * rb + x] = invert ? (byte) (255 - (v & 255)) : v;
+            }
+        bm.copyPixelsFromBuffer(ByteBuffer.wrap(rows));
+        return bm;
+    }
+
+    private byte[] a8ToBytes(Bitmap bm) {
+        int rb = bm.getRowBytes();
+        ByteBuffer bb = ByteBuffer.allocate(rb * docH);
+        bm.copyPixelsToBuffer(bb);
+        byte[] rows = bb.array(), out = new byte[docW * docH];
+        for (int y = 0; y < docH; y++) System.arraycopy(rows, y * rb, out, y * docW, docW);
+        return out;
+    }
+
+    private void updateSelOverlay() {
+        if (selOverlay != null) selOverlay.recycle();
+        selOverlay = sel == null ? null : bytesToA8(sel, true);
+        invalidate();
+    }
+
+    /** Combines a new shape mask into the selection (add or subtract). */
+    private void combineSel(byte[] m) {
+        if (sel == null) {
+            sel = new byte[docW * docH];
+            if (selSubtract) java.util.Arrays.fill(sel, (byte) 255);
+        }
+        int any = 0;
+        for (int i = 0; i < sel.length; i++) {
+            int a = sel[i] & 255, b = m[i] & 255;
+            int v = selSubtract ? Math.min(a, 255 - b) : Math.max(a, b);
+            sel[i] = (byte) v;
+            any |= v;
+        }
+        if (any == 0) sel = null;
+        updateSelOverlay();
+        changed();
+    }
+
+    private boolean selectTouch(MotionEvent e, int action) {
+        view.invert(inverse);
+        map(e.getX(), e.getY());
+        float x = pt[0], y = pt[1];
+        switch (action) {
+            case MotionEvent.ACTION_DOWN:
+                selX0 = x; selY0 = y; autoSX = e.getX();
+                selPath = new Path();
+                selPath.moveTo(x, y);
+                break;
+            case MotionEvent.ACTION_MOVE:
+                if (selPath == null) break;
+                if (selKind == 0) {
+                    autoThr = Fx.clamp(30 + Math.round((e.getX() - autoSX) / getWidth() * 255));
+                    if (onInfo != null) onInfo.accept("Threshold " + autoThr * 100 / 255 + "%  (slide left/right)");
+                } else if (selKind == 1) selPath.lineTo(x, y);
+                else {
+                    selPath.reset();
+                    RectF r = new RectF(Math.min(selX0, x), Math.min(selY0, y), Math.max(selX0, x), Math.max(selY0, y));
+                    if (selKind == 2) selPath.addRect(r, Path.Direction.CW); else selPath.addOval(r, Path.Direction.CW);
+                }
+                invalidate();
+                break;
+            case MotionEvent.ACTION_UP: {
+                if (selPath == null) break;
+                byte[] m;
+                if (selKind == 0) {
+                    int sx = (int) selX0, sy = (int) selY0;
+                    if (sx < 0 || sy < 0 || sx >= docW || sy >= docH) { selPath = null; invalidate(); break; }
+                    int[] px = new int[docW * docH];
+                    cur().bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+                    m = new byte[docW * docH];
+                    Fx.flood(px, docW, docH, sx, sy, autoThr, m);
+                } else {
+                    selPath.close();
+                    Bitmap b = Bitmap.createBitmap(docW, docH, Bitmap.Config.ALPHA_8);
+                    Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    new Canvas(b).drawPath(selPath, p);
+                    m = a8ToBytes(b);
+                    b.recycle();
+                }
+                selPath = null;
+                combineSel(m);
+                break;
+            }
+            case MotionEvent.ACTION_CANCEL: selPath = null; invalidate(); break;
+        }
+        return true;
+    }
+
+    public void clearSelection() { sel = null; updateSelOverlay(); changed(); }
+
+    public void invertSelection() {
+        if (sel == null) { sel = new byte[docW * docH]; java.util.Arrays.fill(sel, (byte) 255); }
+        else for (int i = 0; i < sel.length; i++) sel[i] = (byte) (255 - (sel[i] & 255));
+        updateSelOverlay();
+        changed();
+    }
+
+    public void featherSelection(float radius) {
+        if (sel == null) return;
+        Fx.feather(sel, docW, docH, radius);
+        updateSelOverlay();
+    }
+
+    /** Selects the painted pixels of the current layer. */
+    public void selectLayer() {
+        int[] px = new int[docW * docH];
+        cur().bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+        sel = new byte[px.length];
+        for (int i = 0; i < px.length; i++) sel[i] = (byte) (px[i] >>> 24);
+        updateSelOverlay();
+        changed();
+    }
+
+    /** Copies (or cuts) the selection of the current layer into a new layer. */
+    public boolean copyPaste(boolean cut) {
+        commitMove();
+        if (layers.size() >= maxLayers()) return false;
+        Layer src = cur();
+        int n = docW * docH;
+        int[] px = new int[n], out = new int[n];
+        src.bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+        PixelEdit pe = cut ? new PixelEdit(src, new Rect(0, 0, docW, docH)) : null;
+        for (int i = 0; i < n; i++) {
+            int m = sel == null ? 255 : sel[i] & 255, a = px[i] >>> 24;
+            int fa = a * m / 255;
+            out[i] = (fa << 24) | (px[i] & 0xFFFFFF);
+            if (cut) px[i] = ((a - fa) << 24) | (px[i] & 0xFFFFFF);
+        }
+        if (cut) src.bmp.setPixels(px, 0, docW, 0, 0, docW, docH);
+        Layer l = newLayer(cut ? "Cut" : "Copy");
+        l.bmp.setPixels(out, 0, docW, 0, 0, docW, docH);
+        int at = current + 1;
+        Runnable add = () -> { layers.add(at, l); current = at; };
+        Runnable remove = () -> { layers.remove(l); current = at - 1; };
+        if (pe == null) apply(new Op(remove, add, 64));
+        else {
+            push(new Op(() -> { remove.run(); pe.undo(); }, () -> { pe.redo(); add.run(); }, pe.bytes()));
+            add.run();
+            afterHistory();
+        }
+        return true;
+    }
+
+    // ---------- Clipboard ----------
+
+    private Bitmap clipboard;
+
+    /** Copies the selection (or everything) of the current layer, or of all layers when all = true. */
+    public void copy(boolean all, boolean cut) {
+        commitMove();
+        Bitmap src = all ? flatten() : cur().bmp;
+        int n = docW * docH;
+        int[] px = new int[n];
+        src.getPixels(px, 0, docW, 0, 0, docW, docH);
+        if (sel != null) for (int i = 0; i < n; i++) px[i] = ((((px[i] >>> 24) * (sel[i] & 255)) / 255) << 24) | (px[i] & 0xFFFFFF);
+        if (clipboard != null) clipboard.recycle();
+        clipboard = Bitmap.createBitmap(docW, docH, Bitmap.Config.ARGB_8888);
+        clipboard.setPixels(px, 0, docW, 0, 0, docW, docH);
+        if (all) src.recycle();
+        if (cut && !all) clearLayer();
+    }
+
+    public boolean hasClipboard() { return clipboard != null && clipboard.getWidth() == docW && clipboard.getHeight() == docH; }
+
+    public boolean paste() {
+        if (!hasClipboard()) return true;
+        Layer l = newLayer("Pasted");
+        new Canvas(l.bmp).drawBitmap(clipboard, 0, 0, null);
+        return addLayer(l);
+    }
+
+    // ---------- Colour fill (ColorDrop) ----------
+
+    /** Fills the area under a screen point on the current layer with the ink grey. */
+    public void colorDrop(float sx, float sy, int threshold) {
+        commitMove();
+        view.invert(inverse);
+        map(sx, sy);
+        int x = (int) pt[0], y = (int) pt[1];
+        if (x < 0 || y < 0 || x >= docW || y >= docH) return;
+        int n = docW * docH;
+        int[] px = new int[n];
+        Layer l = cur();
+        l.bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+        byte[] m = new byte[n];
+        Fx.flood(px, docW, docH, x, y, threshold, m);
+        Fx.dilate(m, docW, docH);
+        push(new PixelEdit(l, new Rect(0, 0, docW, docH)));
+        fillWith(px, m);
+        l.bmp.setPixels(px, 0, docW, 0, 0, docW, docH);
+        afterHistory();
+    }
+
+    /** Paints ink over px where mask (and selection) allow. */
+    private void fillWith(int[] px, byte[] m) {
+        boolean lock = cur().alphaLock;
+        for (int i = 0; i < px.length; i++) {
+            int k = m == null ? 255 : m[i] & 255;
+            if (sel != null) k = k * (sel[i] & 255) / 255;
+            if (k == 0) continue;
+            int A = px[i] >>> 24, G = px[i] & 255;
+            if (lock) { px[i] = Fx.pix(A, G + (grey - G) * k / 255); continue; }
+            int keep = A * (255 - k) / 255, nA = k + keep;
+            px[i] = Fx.pix(nA, nA == 0 ? 0 : (grey * k + G * keep) / nA);
+        }
+    }
+
+    public void fillLayer() {
+        commitMove();
+        Layer l = cur();
+        int[] px = new int[docW * docH];
+        l.bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+        push(new PixelEdit(l, new Rect(0, 0, docW, docH)));
+        fillWith(px, null);
+        l.bmp.setPixels(px, 0, docW, 0, 0, docW, docH);
+        afterHistory();
+    }
+
+    public void invertLayer() {
+        commitMove();
+        Layer l = cur();
+        int[] px = new int[docW * docH], out = new int[docW * docH];
+        l.bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+        push(new PixelEdit(l, new Rect(0, 0, docW, docH)));
+        Fx.lut(px, out, Fx.invert());
+        Fx.mixSel(px, out, sel);
+        l.bmp.setPixels(out, 0, docW, 0, 0, docW, docH);
+        afterHistory();
+    }
+
+    // ---------- Adjustments (live preview on a worker thread) ----------
+
+    interface AdjFn { void run(int[] src, int[] out); }
+
+    private int[] adjSrc;
+    private PixelEdit adjEdit;
+    private volatile AdjFn adjPending;
+    private volatile int adjGen;
+    private boolean adjBusy;
+    public java.util.function.BiConsumer<Float, Boolean> onAdjustDrag; // fraction moved, finished
+    public java.util.function.BiConsumer<Float, Float> onAdjustTap;    // canvas point
+    private float adjDownX, adjDownY;
+    private boolean adjDragging;
+
+    public boolean adjusting() { return adjSrc != null; }
+
+    public void beginAdjust() {
+        commitMove();
+        Layer l = cur();
+        adjEdit = new PixelEdit(l, new Rect(0, 0, docW, docH));
+        adjSrc = new int[docW * docH];
+        l.bmp.getPixels(adjSrc, 0, docW, 0, 0, docW, docH);
+    }
+
+    /** Requests a preview; only the newest request is computed. */
+    public void previewAdjust(AdjFn fn) {
+        if (adjSrc == null) return;
+        adjPending = fn;
+        adjGen++;
+        if (adjBusy) return;
+        adjBusy = true;
+        runAdjustWorker();
+    }
+
+    private void runAdjustWorker() {
+        AdjFn fn = adjPending;
+        int gen = adjGen;
+        int[] src = adjSrc;
+        byte[] sm = sel;
+        new Thread(() -> {
+            int[] out = new int[src.length];
+            try { fn.run(src, out); Fx.mixSel(src, out, sm); } catch (Throwable t) { out = null; }
+            int[] res = out;
+            post(() -> {
+                if (adjSrc != src) { adjBusy = false; return; }
+                if (res != null) { cur().bmp.setPixels(res, 0, docW, 0, 0, docW, docH); cur().dirty = true; invalidate(); }
+                if (adjGen != gen) runAdjustWorker(); else adjBusy = false;
+            });
+        }).start();
+    }
+
+    /** Applies (runs the final effect synchronously) or cancels the adjustment. */
+    public void endAdjust(AdjFn fn) {
+        if (adjSrc == null) return;
+        int[] src = adjSrc;
+        adjSrc = null;
+        adjGen++;
+        Layer l = cur();
+        if (fn != null) {
+            int[] out = new int[src.length];
+            fn.run(src, out);
+            Fx.mixSel(src, out, sel);
+            l.bmp.setPixels(out, 0, docW, 0, 0, docW, docH);
+            push(adjEdit);
+        } else l.bmp.setPixels(src, 0, docW, 0, 0, docW, docH);
+        adjEdit = null;
+        afterHistory();
+    }
+
+    /** In Adjust mode, horizontal drags change the amount (like Procreate); taps report a point. */
+    private boolean adjustTouch(MotionEvent e, int action) {
+        switch (action) {
+            case MotionEvent.ACTION_DOWN: adjDownX = e.getX(); adjDownY = e.getY(); adjDragging = false; break;
+            case MotionEvent.ACTION_MOVE:
+                if (Math.abs(e.getX() - adjDownX) > 10) adjDragging = true;
+                if (adjDragging && onAdjustDrag != null) onAdjustDrag.accept((e.getX() - adjDownX) / getWidth(), false);
+                break;
+            case MotionEvent.ACTION_UP:
+                if (adjDragging) { if (onAdjustDrag != null) onAdjustDrag.accept((e.getX() - adjDownX) / getWidth(), true); }
+                else if (onAdjustTap != null) {
+                    view.invert(inverse);
+                    map(e.getX(), e.getY());
+                    onAdjustTap.accept(pt[0], pt[1]);
+                }
+                break;
+        }
+        return true;
+    }
+
+    // ---------- Liquify ----------
+
+    public int liqMode;                 // 0 push, 1 twirl right, 2 twirl left, 3 pinch, 4 expand, 5 reconstruct
+    public float liqSize = 120, liqStrength = 0.5f;
+    private int[] liqSrc;
+    private float[] fdx, fdy;
+    private int gw, gh;
+    private PixelEdit liqEdit;
+    private boolean liqDown;
+    private float liqX, liqY;
+    private static final int G = 4;     // displacement grid spacing (pixels)
+
+    public void beginLiquify() {
+        commitMove();
+        Layer l = cur();
+        liqEdit = new PixelEdit(l, new Rect(0, 0, docW, docH));
+        liqSrc = new int[docW * docH];
+        l.bmp.getPixels(liqSrc, 0, docW, 0, 0, docW, docH);
+        gw = docW / G + 2; gh = docH / G + 2;
+        fdx = new float[gw * gh]; fdy = new float[gw * gh];
+    }
+
+    public boolean liquifying() { return liqSrc != null; }
+
+    public void endLiquify(boolean apply) {
+        if (liqSrc == null) return;
+        if (apply) push(liqEdit);
+        else cur().bmp.setPixels(liqSrc, 0, docW, 0, 0, docW, docH);
+        liqSrc = null; fdx = fdy = null; liqEdit = null;
+        afterHistory();
+    }
+
+    public void liquifyResetAll() {
+        if (liqSrc == null) return;
+        java.util.Arrays.fill(fdx, 0); java.util.Arrays.fill(fdy, 0);
+        cur().bmp.setPixels(liqSrc, 0, docW, 0, 0, docW, docH);
+        invalidate();
+    }
+
+    private final Runnable liqTick = new Runnable() { // twirl/pinch keep working while held
+        public void run() {
+            if (!liqDown || liqSrc == null || liqMode == 0) return;
+            liquifyAt(liqX, liqY, 0, 0, 0.35f);
+            postDelayed(this, 30);
+        }
+    };
+
+    private boolean liquifyTouch(MotionEvent e, int action) {
+        if (liqSrc == null) return true;
+        view.invert(inverse);
+        map(e.getX(), e.getY());
+        float x = pt[0], y = pt[1];
+        switch (action) {
+            case MotionEvent.ACTION_DOWN:
+                liqDown = true; liqX = x; liqY = y;
+                postDelayed(liqTick, 30);
+                break;
+            case MotionEvent.ACTION_MOVE:
+                if (!liqDown) break;
+                liquifyAt(x, y, x - liqX, y - liqY, 1f);
+                liqX = x; liqY = y;
+                break;
+            default:
+                liqDown = false;
+                removeCallbacks(liqTick);
+        }
+        return true;
+    }
+
+    private void liquifyAt(float cx, float cy, float dx, float dy, float k) {
+        float R = liqSize, st = liqStrength * k;
+        int gx0 = Math.max(0, (int) ((cx - R) / G)), gx1 = Math.min(gw - 1, (int) ((cx + R) / G) + 1);
+        int gy0 = Math.max(0, (int) ((cy - R) / G)), gy1 = Math.min(gh - 1, (int) ((cy + R) / G) + 1);
+        for (int gy = gy0; gy <= gy1; gy++)
+            for (int gx = gx0; gx <= gx1; gx++) {
+                float vx = gx * G - cx, vy = gy * G - cy;
+                float d = (float) Math.hypot(vx, vy);
+                if (d >= R) continue;
+                float w = (1 - d / R); w *= w;
+                int i = gy * gw + gx;
+                switch (liqMode) {
+                    case 0: fdx[i] += dx * w * liqStrength * 1.6f; fdy[i] += dy * w * liqStrength * 1.6f; break;
+                    case 1: case 2: {
+                        float a = (liqMode == 1 ? 0.08f : -0.08f) * w * st;
+                        float c = (float) Math.cos(a), s = (float) Math.sin(a);
+                        fdx[i] += vx - (vx * c - vy * s); fdy[i] += vy - (vx * s + vy * c);
+                        break;
+                    }
+                    case 3: fdx[i] -= vx * 0.04f * w * st; fdy[i] -= vy * 0.04f * w * st; break;
+                    case 4: fdx[i] += vx * 0.04f * w * st; fdy[i] += vy * 0.04f * w * st; break;
+                    default: fdx[i] *= 1 - 0.25f * w * Math.max(0.2f, st); fdy[i] *= 1 - 0.25f * w * Math.max(0.2f, st);
+                }
+            }
+        Rect r = new Rect((int) (cx - R) - 2, (int) (cy - R) - 2, (int) (cx + R) + 3, (int) (cy + R) + 3);
+        if (r.intersect(0, 0, docW, docH)) renderLiquify(r);
+    }
+
+    private float field(float[] f, float x, float y) {
+        float gx = x / G, gy = y / G;
+        int ix = Math.min(gw - 2, (int) gx), iy = Math.min(gh - 2, (int) gy);
+        float tx = gx - ix, ty = gy - iy;
+        int i = iy * gw + ix;
+        float a = f[i] + (f[i + 1] - f[i]) * tx, b = f[i + gw] + (f[i + gw + 1] - f[i + gw]) * tx;
+        return a + (b - a) * ty;
+    }
+
+    private void renderLiquify(Rect r) {
+        int w = r.width(), h = r.height();
+        int[] out = new int[w * h];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int X = r.left + x, Y = r.top + y;
+                float sx = X - field(fdx, X, Y), sy = Y - field(fdy, X, Y);
+                int p = bilinear(liqSrc, sx, sy);
+                if (sel != null) {
+                    int m = sel[Y * docW + X] & 255, o = liqSrc[Y * docW + X];
+                    if (m < 255) p = Fx.pix(((o >>> 24) * (255 - m) + (p >>> 24) * m) / 255, ((o & 255) * (255 - m) + (p & 255) * m) / 255);
+                }
+                out[y * w + x] = p;
+            }
+        cur().bmp.setPixels(out, 0, w, r.left, r.top, w, h);
+        cur().dirty = true;
+        invalidate();
+    }
+
+    private int bilinear(int[] s, float x, float y) {
+        x = Math.max(0, Math.min(docW - 1.001f, x)); y = Math.max(0, Math.min(docH - 1.001f, y));
+        int ix = (int) x, iy = (int) y;
+        float tx = x - ix, ty = y - iy;
+        int i = iy * docW + ix;
+        int p00 = s[i], p10 = s[Math.min(i + 1, s.length - 1)], p01 = s[Math.min(i + docW, s.length - 1)], p11 = s[Math.min(i + docW + 1, s.length - 1)];
+        float a00 = p00 >>> 24, a10 = p10 >>> 24, a01 = p01 >>> 24, a11 = p11 >>> 24;
+        float a = (a00 * (1 - tx) + a10 * tx) * (1 - ty) + (a01 * (1 - tx) + a11 * tx) * ty;
+        if (a < 0.5f) return 0;
+        float g = ((p00 & 255) * a00 * (1 - tx) + (p10 & 255) * a10 * tx) * (1 - ty)
+                + ((p01 & 255) * a01 * (1 - tx) + (p11 & 255) * a11 * tx) * ty;
+        return Fx.pix(Math.round(a), Fx.clamp(Math.round(g / a)));
+    }
+
+    // ---------- Layer properties ----------
+
+    public void setBlend(int i, int mode) {
+        Layer l = layers.get(i);
+        int old = l.blend;
+        apply(new Op(() -> l.blend = old, () -> l.blend = mode, 64));
+    }
+
+    public void toggleAlphaLock(int i) {
+        Layer l = layers.get(i);
+        boolean v = l.alphaLock;
+        apply(new Op(() -> l.alphaLock = v, () -> l.alphaLock = !v, 64));
+    }
+
+    public void toggleClip(int i) {
+        Layer l = layers.get(i);
+        boolean v = l.clip;
+        apply(new Op(() -> l.clip = v, () -> l.clip = !v, 64));
+    }
+
+    public void rename(int i, String name) {
+        Layer l = layers.get(i);
+        String old = l.name;
+        apply(new Op(() -> l.name = old, () -> l.name = name, 64));
+    }
+
+    /** New layer with text, centred, in the ink grey. */
+    public boolean addTextLayer(String text, float sizePx, boolean bold) {
+        Layer l = newLayer(text.length() > 20 ? text.substring(0, 20) + "…" : text);
+        android.text.TextPaint tp = new android.text.TextPaint(Paint.ANTI_ALIAS_FLAG);
+        tp.setColor(Color.rgb(grey, grey, grey));
+        tp.setTextSize(sizePx);
+        tp.setFakeBoldText(bold);
+        android.text.StaticLayout sl = android.text.StaticLayout.Builder
+                .obtain(text, 0, text.length(), tp, Math.max(1, (int) (docW * 0.9f)))
+                .setAlignment(android.text.Layout.Alignment.ALIGN_CENTER).build();
+        Canvas c = new Canvas(l.bmp);
+        c.translate(docW * 0.05f, (docH - sl.getHeight()) / 2f);
+        sl.draw(c);
+        return addLayer(l);
+    }
 
     private void afterHistory() {
         if (current >= layers.size()) current = layers.size() - 1;
@@ -818,7 +1706,7 @@ public class CanvasView extends View {
     public boolean duplicate() {
         Layer s = cur();
         Layer d = new Layer(s.bmp.copy(Bitmap.Config.ARGB_8888, true), s.name + " copy");
-        d.opacity = s.opacity;
+        d.copyProps(s);
         return addLayer(d);
     }
 
@@ -847,6 +1735,7 @@ public class CanvasView extends View {
         PixelEdit pe = new PixelEdit(down, new Rect(0, 0, docW, docH));
         Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
         p.setAlpha(up.visible ? up.opacity : 0);
+        p.setBlendMode(up.clip ? android.graphics.BlendMode.SRC_ATOP : BLENDS[up.blend]);
         new Canvas(down.bmp).drawBitmap(up.bmp, 0, 0, p);
         Runnable r = () -> { layers.remove(up); current = at - 1; };
         push(new Op(() -> { pe.undo(); layers.add(at, up); current = at; },
@@ -858,7 +1747,14 @@ public class CanvasView extends View {
     public void clearLayer() {
         commitMove();
         push(new PixelEdit(cur(), new Rect(0, 0, docW, docH)));
-        cur().bmp.eraseColor(0);
+        if (sel == null) cur().bmp.eraseColor(0);
+        else {
+            int[] px = new int[docW * docH];
+            cur().bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+            for (int i = 0; i < px.length; i++)
+                px[i] = (((px[i] >>> 24) * (255 - (sel[i] & 255)) / 255) << 24) | (px[i] & 0xFFFFFF);
+            cur().bmp.setPixels(px, 0, docW, 0, 0, docW, docH);
+        }
         afterHistory();
     }
 
@@ -895,12 +1791,7 @@ public class CanvasView extends View {
         Bitmap out = Bitmap.createBitmap(docW, docH, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(out);
         c.drawColor(Color.WHITE);
-        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
-        for (Layer l : layers) {
-            if (!l.visible) continue;
-            p.setAlpha(l.opacity);
-            c.drawBitmap(l.bmp, 0, 0, p);
-        }
+        render(c, false);
         return out;
     }
 

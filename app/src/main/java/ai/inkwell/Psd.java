@@ -19,6 +19,9 @@ import java.util.List;
 
 /** Minimal Photoshop (.psd) reader/writer: 8-bit RGB or greyscale, layers, RLE. Colours become grey. */
 final class Psd {
+    /** PSD blend keys in CanvasView.BLEND_NAMES order. */
+    static final String[] KEYS = {"norm", "mul ", "scrn", "over", "dark", "lite", "idiv", "div ", "hLit", "sLit", "diff", "lddg"};
+
     static final class Doc {
         int w, h;
         final ArrayList<CanvasView.Layer> layers = new ArrayList<>();
@@ -69,8 +72,8 @@ final class Psd {
         int[][] rects = new int[count][];
         int[][] chIds = new int[count][];
         long[][] chLens = new long[count][];
-        int[] opac = new int[count];
-        boolean[] hidden = new boolean[count], folder = new boolean[count];
+        int[] opac = new int[count], blend = new int[count];
+        boolean[] hidden = new boolean[count], folder = new boolean[count], clip = new boolean[count], lock = new boolean[count];
         String[] names = new String[count];
 
         for (int i = 0; i < count; i++) {
@@ -82,10 +85,16 @@ final class Psd {
                 chIds[i][c] = in.readShort();
                 chLens[i][c] = in.readInt() & 0xFFFFFFFFL;
             }
-            skip(in, 8); // "8BIM" + blend key
+            skip(in, 4); // "8BIM"
+            byte[] bk = new byte[4];
+            in.readFully(bk);
+            String bkey = new String(bk, StandardCharsets.ISO_8859_1);
+            for (int k = 0; k < KEYS.length; k++) if (KEYS[k].equals(bkey)) blend[i] = k;
             opac[i] = in.readUnsignedByte();
-            in.readUnsignedByte();
-            hidden[i] = (in.readUnsignedByte() & 2) != 0;
+            clip[i] = in.readUnsignedByte() != 0;
+            int flags = in.readUnsignedByte();
+            hidden[i] = (flags & 2) != 0;
+            lock[i] = (flags & 1) != 0;
             in.readUnsignedByte();
             byte[] extra = new byte[in.readInt()];
             in.readFully(extra);
@@ -131,6 +140,9 @@ final class Psd {
             CanvasView.Layer layer = new CanvasView.Layer(Bitmap.createBitmap(doc.w, doc.h, Bitmap.Config.ARGB_8888), names[i]);
             layer.opacity = opac[i];
             layer.visible = !hidden[i];
+            layer.blend = blend[i];
+            layer.clip = clip[i];
+            layer.alphaLock = lock[i];
             if (lw > 0 && lh > 0 && ch[0] != null) {
                 Bitmap part = compose(ch, lw, lh, mode);
                 Matrix m = new Matrix();
@@ -264,10 +276,10 @@ final class Psd {
             r.writeShort(4);
             r.writeShort(-1); r.writeInt(alpha.length);
             for (int c = 0; c < 3; c++) { r.writeShort(c); r.writeInt(grey.length); }
-            r.writeBytes("8BIMnorm");
+            r.writeBytes("8BIM" + KEYS[l.blend]);
             r.writeByte(l.opacity);
-            r.writeByte(0);
-            r.writeByte(l.visible ? 0 : 2);
+            r.writeByte(l.clip ? 1 : 0);
+            r.writeByte((l.visible ? 0 : 2) | (l.alphaLock ? 1 : 0));
             r.writeByte(0);
             byte[] name = l.name.getBytes(StandardCharsets.ISO_8859_1);
             int nl = Math.min(name.length, 255);

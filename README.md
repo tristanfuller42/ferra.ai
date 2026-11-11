@@ -8,11 +8,25 @@ A tiny greyscale drawing app for Android (built for Pixel Fold). No libraries, p
 
 ## Use
 Layout matches Procreate so you can switch between the two easily:
-- **Top-left**: actions menu (open, import, export, canvas size, import brushes, sidebar side, gestures help) and Move.
-- **Top-right**: brush, eraser, layers, ink colour. Tap the active brush or eraser again for the brush library.
-- **Sidebar** (left, or right via the actions menu): brush size, eyedropper, brush opacity, undo, redo.
+- **Top-left**: Actions (files, canvas, text, drawing guides, brushes, help), Adjustments (wand), Selection (lasso), Transform (arrow).
+- **Top-right**: Brush, Smudge, Eraser, Layers, Colour. Tap the active brush/smudge/eraser again for the brush library.
+- **Sidebar** (left, or right via Actions): brush size, eyedropper, brush opacity, undo, redo.
 
-- **Brush / Erase / Move**: pick a tool. **Ink** button picks any grey (slider + swatches, black to white). Slider = size.
+### Tools
+- **Selection**: Automatic (tap; slide left/right to set threshold), Freehand, Rectangle, Ellipse; Add/Subtract,
+  Invert, Copy & Paste, Cut & Paste, Feather, Clear. Brushes, smudge, fills, adjustments and transforms stay inside the selection.
+- **Transform**: drag/pinch/twist (Uniform), Distort (drag corners), Flip H/V, Rotate 90°, Reset. Moves only the selection if there is one.
+- **Adjustments**: Gaussian Blur, Motion Blur, Perspective Blur, Noise, Sharpen, Bloom, Glitch, Halftone, Liquify
+  (push, twirl, pinch, expand, reconstruct), Clone, Brightness/Contrast, Curves, plus Threshold, Posterize, Invert.
+  Slide left/right on the canvas to change the amount. Colour-only adjustments (hue, colour balance, recolor,
+  chromatic aberration, gradient map) are left out on purpose: Inkwell is greyscale.
+- **Smudge**: uses the current brush shape.
+- **ColorDrop**: drag the colour circle onto the canvas to fill an area.
+- **Layers**: tap the selected layer for options: rename, select, copy, fill, clear, alpha lock, clipping mask,
+  invert, merge down, blend mode (12 modes), delete. Tap the letter on a layer to change its blend mode.
+- **Text**: Actions → Add text.
+- **Drawing guides**: 2D grid; symmetry vertical, horizontal, quadrant, radial.
+
 - **Brushes**: tap the active brush button (or Erase) again to pick a brush and set brush opacity.
   - Size only from pressure: Ink pen, Brush pen (strong taper), Fine liner (no pressure), Marker (see-through).
   - Size + opacity from pressure: Dry ink, HB pencil, 6B pencil, Charcoal (paper grain), Soft shading, Airbrush.
@@ -26,7 +40,7 @@ Layout matches Procreate so you can switch between the two easily:
 - **Gestures** (like Procreate):
   - Two fingers: pinch zoom, drag pan, twist rotate. **Quick pinch-in** = fit canvas to screen.
   - Two-finger tap = undo. Two-finger **hold** = keep undoing. Three-finger tap = redo.
-  - Three-finger **scrub** (side to side) = clear layer.
+  - Three-finger **scrub** (side to side) = clear layer. Three-finger **swipe down** = copy & paste menu.
   - Four-finger tap = hide/show toolbar (full screen).
   - Touch and **hold** with a finger = eyedropper (pick a grey); keep dragging to adjust.
   - Draw and **hold** at the end = QuickShape: snaps to a straight line (keep holding and move to adjust),

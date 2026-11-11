@@ -13,7 +13,7 @@ import android.view.View;
 final class Ui {
     static final int BAR = 0xFF1C1C1E, PANEL = 0xF02C2C2E, ACCENT = 0xFF3D9BFF, ICON = 0xFFE8E8E8;
 
-    static final int MENU = 0, MOVE = 1, BRUSH = 2, ERASER = 3, LAYERS = 4, UNDO = 5, REDO = 6, PICK = 7, COLOR = 8;
+    static final int MENU = 0, MOVE = 1, BRUSH = 2, ERASER = 3, LAYERS = 4, UNDO = 5, REDO = 6, PICK = 7, COLOR = 8, ADJUST = 9, SELECT = 10, SMUDGE = 11;
 
     /** Square icon button. Icons are drawn in a 24x24 box. */
     static final class Icon extends View {
@@ -99,6 +99,24 @@ final class Ui {
                     p.setStrokeWidth(1.8f);
                     c.drawLine(12, 7, 17, 12, p);
                     break;
+                case ADJUST: // magic wand
+                    c.drawLine(4, 20, 15, 9, p);
+                    c.drawLine(17, 3, 17, 7, p); c.drawLine(15, 5, 19, 5, p);
+                    c.drawLine(20, 10, 20, 12, p); c.drawLine(19, 11, 21, 11, p);
+                    c.drawLine(10, 4, 10, 6, p); c.drawLine(9, 5, 11, 5, p);
+                    break;
+                case SELECT: // dashed lasso
+                    p.setPathEffect(new android.graphics.DashPathEffect(new float[]{2.5f, 2.5f}, 0));
+                    c.drawOval(new RectF(3, 4, 21, 15), p);
+                    p.setPathEffect(null);
+                    path.moveTo(7, 14); path.quadTo(5, 18, 9, 20);
+                    c.drawPath(path, p);
+                    break;
+                case SMUDGE: // fingertip dragging a streak
+                    path.moveTo(3, 19); path.quadTo(9, 15, 13, 17); path.quadTo(17, 19, 21, 15);
+                    c.drawPath(path, p);
+                    c.drawRoundRect(new RectF(11, 3, 17, 13), 3, 3, p);
+                    break;
                 case COLOR:
                     p.setStyle(Paint.Style.FILL);
                     p.setColor(Color.rgb(grey, grey, grey));
@@ -113,6 +131,82 @@ final class Ui {
 
         @Override
         protected void drawableStateChanged() { super.drawableStateChanged(); invalidate(); }
+    }
+
+    /** Curves editor: tap to add a point, drag to move it, drag a point off the side to remove it. */
+    static final class CurveView extends View {
+        final java.util.ArrayList<float[]> pts = new java.util.ArrayList<>();
+        Runnable listener;
+        private int drag = -1;
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        CurveView(Context c) { super(c); reset(); }
+
+        void reset() {
+            pts.clear();
+            pts.add(new float[]{0, 0});
+            pts.add(new float[]{1, 1});
+            invalidate();
+        }
+
+        float[][] arrays() {
+            pts.sort((a, b) -> Float.compare(a[0], b[0]));
+            float[] xs = new float[pts.size()], ys = new float[pts.size()];
+            for (int i = 0; i < xs.length; i++) { xs[i] = pts.get(i)[0]; ys[i] = pts.get(i)[1]; }
+            return new float[][]{xs, ys};
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            float w = getWidth(), h = getHeight(), d = getResources().getDisplayMetrics().density;
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(0xFF1C1C1E);
+            c.drawRect(0, 0, w, h, p);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(1);
+            p.setColor(0xFF48484A);
+            for (int i = 1; i < 4; i++) { c.drawLine(w * i / 4, 0, w * i / 4, h, p); c.drawLine(0, h * i / 4, w, h * i / 4, p); }
+            float[][] a = arrays();
+            int[] lut = Fx.curve(a[0], a[1]);
+            Path path = new Path();
+            for (int i = 0; i < 256; i++) {
+                float x = w * i / 255f, y = h - h * lut[i] / 255f;
+                if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
+            }
+            p.setStrokeWidth(2 * d);
+            p.setColor(Color.WHITE);
+            c.drawPath(path, p);
+            p.setStyle(Paint.Style.FILL);
+            for (float[] q : pts) c.drawCircle(q[0] * w, h - q[1] * h, 6 * d, p);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent e) {
+            float w = getWidth(), h = getHeight(), d = getResources().getDisplayMetrics().density;
+            float x = e.getX() / w, y = 1 - e.getY() / h;
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    drag = -1;
+                    for (int i = 0; i < pts.size(); i++)
+                        if (Math.hypot((pts.get(i)[0] - x) * w, (pts.get(i)[1] - y) * h) < 24 * d) drag = i;
+                    if (drag < 0) { pts.add(new float[]{clamp(x), clamp(y)}); drag = pts.size() - 1; }
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    if (drag < 0) break;
+                    if ((x < -0.15f || x > 1.15f) && pts.size() > 2) { pts.remove(drag); drag = -1; break; }
+                    pts.get(drag)[0] = clamp(x);
+                    pts.get(drag)[1] = clamp(y);
+                    break;
+                default:
+                    drag = -1;
+            }
+            invalidate();
+            if (listener != null) listener.run();
+            getParent().requestDisallowInterceptTouchEvent(true);
+            return true;
+        }
+
+        private static float clamp(float v) { return Math.max(0, Math.min(1, v)); }
     }
 
     /** Vertical slider, value 0 (bottom) .. 1 (top). */
