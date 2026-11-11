@@ -68,8 +68,8 @@ public class MainActivity extends Activity {
         LinearLayout bar = new LinearLayout(this);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding((int) (4 * dp), 0, (int) (4 * dp), 0);
-        brushBtn = button(bar, "Brush", v -> setTool(CanvasView.DRAW));
-        eraseBtn = button(bar, "Erase", v -> setTool(CanvasView.ERASE));
+        brushBtn = button(bar, "", v -> { if (canvas.tool == CanvasView.DRAW) pickBrush(); else setTool(CanvasView.DRAW); });
+        eraseBtn = button(bar, "Erase", v -> { if (canvas.tool == CanvasView.ERASE) pickBrush(); else setTool(CanvasView.ERASE); });
         moveBtn = button(bar, "Move", v -> setTool(CanvasView.MOVE));
         colorBtn = button(bar, "", v -> pickGrey());
         SeekBar sizeBar = new SeekBar(this);
@@ -90,6 +90,7 @@ public class MainActivity extends Activity {
             newDocument(Math.min(m.width(), m.height()), Math.max(m.width(), m.height()));
         }));
         setTool(CanvasView.DRAW);
+        updateBrush();
         updateColor();
 
         HorizontalScrollView scroll = new HorizontalScrollView(this);
@@ -205,6 +206,42 @@ public class MainActivity extends Activity {
         highlight(eraseBtn, t == CanvasView.ERASE);
         highlight(moveBtn, t == CanvasView.MOVE);
     }
+
+    /** Brush list + brush opacity. Tap the active Brush/Erase button to open. */
+    private void pickBrush() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int p = (int) (12 * dp);
+        box.setPadding(p, p, p, p);
+        AlertDialog[] dlg = new AlertDialog[1];
+        for (CanvasView.Brush br : CanvasView.BRUSHES) {
+            TextView t = new TextView(this);
+            t.setText(br.name);
+            t.setTextSize(17);
+            t.setPadding(p, p, p, p);
+            boolean on = br == canvas.brush;
+            t.setBackgroundColor(on ? Color.BLACK : 0);
+            t.setTextColor(on ? Color.WHITE : Color.BLACK);
+            t.setOnClickListener(v -> { canvas.brush = br; updateBrush(); dlg[0].dismiss(); });
+            box.addView(t);
+        }
+        TextView ol = new TextView(this);
+        ol.setText("Brush opacity");
+        ol.setPadding(p, p, p, 0);
+        box.addView(ol);
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(100);
+        sb.setProgress(Math.round(canvas.opacity * 100));
+        sb.setOnSeekBarChangeListener(new Slider() {
+            public void onProgressChanged(SeekBar s, int v, boolean u) { canvas.opacity = Math.max(1, v) / 100f; }
+        });
+        box.addView(sb, new LinearLayout.LayoutParams(-1, (int) (48 * dp)));
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        dlg[0] = new AlertDialog.Builder(this).setTitle("Brushes").setView(sv).setPositiveButton("Done", null).show();
+    }
+
+    private void updateBrush() { brushBtn.setText(canvas.brush.name + " ▾"); }
 
     private void updateColor() {
         int g = canvas.grey;

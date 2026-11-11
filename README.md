@@ -8,7 +8,11 @@ A tiny greyscale drawing app for Android (built for Pixel Fold). No libraries, p
 
 ## Use
 - **Brush / Erase / Move**: pick a tool. **Ink** button picks any grey (slider + swatches, black to white). Slider = size.
-- Stylus pressure changes line width. Stylus eraser end or side button erases.
+- **Brushes**: tap the active brush button (or Erase) again to pick a brush and set brush opacity.
+  - Size only from pressure: Ink pen, Brush pen (strong taper), Fine liner (no pressure), Marker (see-through).
+  - Size + opacity from pressure: Dry ink, HB pencil, 6B pencil, Charcoal (paper grain), Soft shading, Airbrush.
+  - Opacity only from pressure: Hard round.
+  - The eraser uses the selected brush's shape. Stylus eraser end or side button also erases.
 - **Two fingers**: pinch to zoom, drag to pan, twist to rotate. **Fit** resets the view.
 - **Two-finger tap** = undo, **three-finger tap** = redo. Up to 100 steps.
 - **Move tool**: drag moves the current layer; pinch/twist scales and rotates it. Applied when you pick another tool.

@@ -9,7 +9,6 @@ import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
 import android.graphics.Rect;
-import android.graphics.RectF;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -72,17 +71,61 @@ public class CanvasView extends View {
     public float size = 12f;
     private boolean stylusSeen;
 
-    private final Paint pen = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint layerPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final Paint copy = new Paint();
     private final Paint paper = new Paint();
-    private final PorterDuffXfermode clearMode = new PorterDuffXfermode(PorterDuff.Mode.CLEAR);
+
+    /** Brush preset. minSize/minAlpha = size/opacity at zero pressure (1 = pressure doesn't affect it). */
+    public static final class Brush {
+        public final String name;
+        final float minSize, minAlpha, alpha, hard, grain, spacing;
+        Brush(String n, float minSize, float minAlpha, float alpha, float hard, float grain, float spacing) {
+            name = n; this.minSize = minSize; this.minAlpha = minAlpha; this.alpha = alpha;
+            this.hard = hard; this.grain = grain; this.spacing = spacing;
+        }
+    }
+
+    public static final Brush[] BRUSHES = {
+        //          name            minSize minAlpha alpha hard  grain spacing
+        new Brush("Ink pen",        0.15f, 1f,    1f,   0.9f, 0f,    0.08f),
+        new Brush("Brush pen",      0.03f, 1f,    1f,   0.85f, 0f,   0.05f),
+        new Brush("Fine liner",     1f,    1f,    1f,   0.9f, 0f,    0.08f),
+        new Brush("Dry ink",        0.3f,  0.6f,  1f,   0.8f, 0.5f,  0.1f),
+        new Brush("Marker",         1f,    1f,    0.5f, 0.95f, 0f,   0.08f),
+        new Brush("HB pencil",      0.7f,  0.15f, 0.9f, 0.7f, 0.6f,  0.1f),
+        new Brush("6B pencil",      0.6f,  0.25f, 1f,   0.6f, 0.75f, 0.1f),
+        new Brush("Charcoal",       0.6f,  0.2f,  1f,   0.4f, 0.85f, 0.1f),
+        new Brush("Soft shading",   0.5f,  0.05f, 0.8f, 0f,   0f,    0.1f),
+        new Brush("Airbrush",       1f,    0.02f, 0.6f, 0f,   0f,    0.1f),
+        new Brush("Hard round",     1f,    0.1f,  1f,   0.9f, 0f,    0.08f),
+    };
+
+    /** 128x128 tileable paper grain, 0..255. */
+    private static final byte[] NOISE = new byte[128 * 128];
+    static {
+        java.util.Random rnd = new java.util.Random(7);
+        float[] n = new float[128 * 128];
+        for (int i = 0; i < n.length; i++) n[i] = rnd.nextFloat();
+        for (int i = 0; i < n.length; i++) { // light blur so grain looks like paper tooth
+            int x = i & 127, y = i >> 7;
+            float s = 0;
+            for (int k = -1; k <= 1; k++) for (int j = -1; j <= 1; j++)
+                s += n[(((y + k) & 127) << 7) | ((x + j) & 127)];
+            float v = s / 9f;
+            v = Math.max(0, Math.min(1, (v - 0.5f) * 3f + 0.5f));
+            NOISE[i] = (byte) (v * 255);
+        }
+    }
+
+    public Brush brush = BRUSHES[0];
+    public float opacity = 1f;
 
     // Stroke state
-    private Canvas strokeCanvas;
-    private boolean stroking;
-    private float lx, ly;
-    private final RectF dirty = new RectF();
+    private byte[] mask = new byte[0];
+    private int[] buf = new int[4096];
+    private boolean stroking, erasing, penInput;
+    private float lx, ly, lp, nextDab;
+    private final Rect eventDirty = new Rect(), strokeDirty = new Rect();
 
     // View + move-tool transforms (screen space)
     private final Matrix view = new Matrix(), inverse = new Matrix(), moveT = new Matrix(), tmpM = new Matrix();
@@ -97,9 +140,6 @@ public class CanvasView extends View {
 
     public CanvasView(Context c) {
         super(c);
-        pen.setStyle(Paint.Style.STROKE);
-        pen.setStrokeCap(Paint.Cap.ROUND);
-        pen.setStrokeJoin(Paint.Join.ROUND);
         copy.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC));
         paper.setColor(Color.WHITE);
         setBackgroundColor(0xFF2A2A2A);
@@ -117,6 +157,7 @@ public class CanvasView extends View {
         moving = false; moveT.reset();
         backup = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         backupCanvas = new Canvas(backup);
+        mask = new byte[w * h];
         syncBackup();
         if (getWidth() > 0) fit();
         changed();
@@ -211,28 +252,27 @@ public class CanvasView extends View {
 
         view.invert(inverse);
         switch (action) {
-            case MotionEvent.ACTION_DOWN: {
-                boolean erase = tool == ERASE || type == MotionEvent.TOOL_TYPE_ERASER
+            case MotionEvent.ACTION_DOWN:
+                erasing = tool == ERASE || type == MotionEvent.TOOL_TYPE_ERASER
                         || (e.getButtonState() & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0;
-                pen.setXfermode(erase ? clearMode : null);
-                pen.setColor(Color.rgb(grey, grey, grey));
-                strokeCanvas = new Canvas(cur().bmp);
+                penInput = isPen;
                 stroking = true;
+                strokeDirty.setEmpty();
                 map(e.getX(), e.getY());
-                lx = pt[0]; ly = pt[1];
-                dirty.set(lx, ly, lx, ly);
-                segment(lx, ly, e.getPressure(), isPen, erase);
+                lx = pt[0]; ly = pt[1]; lp = e.getPressure();
+                stamp(lx, ly, lp);
+                nextDab = step(lp);
+                flush();
                 break;
-            }
             case MotionEvent.ACTION_MOVE:
                 if (!stroking) break;
-                boolean erase = pen.getXfermode() != null;
                 for (int i = 0; i < e.getHistorySize(); i++) {
                     map(e.getHistoricalX(i), e.getHistoricalY(i));
-                    segment(pt[0], pt[1], e.getHistoricalPressure(i), isPen, erase);
+                    segmentTo(pt[0], pt[1], e.getHistoricalPressure(i));
                 }
                 map(e.getX(), e.getY());
-                segment(pt[0], pt[1], e.getPressure(), isPen, erase);
+                segmentTo(pt[0], pt[1], e.getPressure());
+                flush();
                 break;
             case MotionEvent.ACTION_UP:
                 if (stroking) commitStroke();
@@ -246,30 +286,104 @@ public class CanvasView extends View {
 
     private void map(float x, float y) { pt[0] = x; pt[1] = y; inverse.mapPoints(pt); }
 
-    private void segment(float x, float y, float pressure, boolean isPen, boolean erase) {
-        float w = isPen ? size * (0.15f + 0.85f * Math.min(pressure, 1f)) : size;
-        if (erase) w *= 2f;
-        pen.setStrokeWidth(w);
-        if (x == lx && y == ly) strokeCanvas.drawPoint(x, y, pen);
-        else strokeCanvas.drawLine(lx, ly, x, y, pen);
-        dirty.union(x - w, y - w, x + w, y + w);
-        dirty.union(lx - w, ly - w, lx + w, ly + w);
-        lx = x; ly = y;
+    // ---------- Brush engine ----------
+    // Each stroke stamps round "dabs" into a coverage mask (max, so overlaps don't darken),
+    // then the mask is composited onto the layer's pre-stroke pixels with the ink grey.
+
+    private float pres(float p) { return penInput ? Math.max(0f, Math.min(p, 1f)) : 1f; }
+
+    private float diameter(float p) {
+        return Math.max(1f, size * (brush.minSize + (1 - brush.minSize) * pres(p)));
+    }
+
+    private float step(float p) { return Math.max(0.5f, diameter(p) * brush.spacing); }
+
+    private void segmentTo(float x, float y, float p) {
+        float dx = x - lx, dy = y - ly;
+        float d = (float) Math.hypot(dx, dy);
+        if (d < 0.01f) { lp = p; return; }
+        while (nextDab <= d) {
+            float t = nextDab / d;
+            float q = lp + (p - lp) * t;
+            stamp(lx + dx * t, ly + dy * t, q);
+            nextDab += step(q);
+        }
+        nextDab -= d;
+        lx = x; ly = y; lp = p;
+    }
+
+    private void stamp(float cx, float cy, float p) {
+        Brush b = brush;
+        float r = diameter(p) / 2f;
+        float pr = pres(p);
+        int a = (int) (255 * opacity * b.alpha * (b.minAlpha + (1 - b.minAlpha) * pr));
+        if (a <= 0) return;
+        float soft = Math.max(1f, r * (1 - b.hard));
+        int x0 = Math.max(0, (int) (cx - r - 1)), x1 = Math.min(docW - 1, (int) (cx + r + 1));
+        int y0 = Math.max(0, (int) (cy - r - 1)), y1 = Math.min(docH - 1, (int) (cy + r + 1));
+        if (x0 > x1 || y0 > y1) return;
+        float grain = b.grain;
+        for (int y = y0; y <= y1; y++) {
+            float fy = y + 0.5f - cy;
+            int row = y * docW;
+            for (int x = x0; x <= x1; x++) {
+                float fx = x + 0.5f - cx;
+                float dist = (float) Math.sqrt(fx * fx + fy * fy);
+                float c = (r - dist) / soft + (b.hard > 0.5f ? 0.5f : 0f);
+                if (c <= 0) continue;
+                if (c > 1) c = 1;
+                else if (b.hard <= 0.5f) c = c * c * (3 - 2 * c);
+                if (grain > 0) c *= 1 - grain + grain * NOISE[((y & 127) << 7) | (x & 127)] / 255f;
+                int v = (int) (a * c);
+                if (v > (mask[row + x] & 255)) mask[row + x] = (byte) v;
+            }
+        }
+        if (eventDirty.isEmpty()) eventDirty.set(x0, y0, x1 + 1, y1 + 1);
+        else eventDirty.union(x0, y0, x1 + 1, y1 + 1);
+    }
+
+    /** Composites the mask over the backup into the layer, for the area touched since last flush. */
+    private void flush() {
+        Rect r = eventDirty;
+        if (r.isEmpty()) return;
+        int w = r.width(), h = r.height();
+        if (buf.length < w * h) buf = new int[w * h];
+        backup.getPixels(buf, 0, w, r.left, r.top, w, h);
+        int ink = grey;
+        for (int y = 0; y < h; y++) {
+            int mrow = (r.top + y) * docW + r.left, brow = y * w;
+            for (int x = 0; x < w; x++) {
+                int m = mask[mrow + x] & 255;
+                if (m == 0) continue;
+                int px = buf[brow + x];
+                int A = px >>> 24, G = px & 255;
+                int nA, nG;
+                if (erasing) { nA = A * (255 - m) / 255; nG = G; }
+                else {
+                    int keep = A * (255 - m) / 255;
+                    nA = m + keep;
+                    nG = nA == 0 ? 0 : (ink * m + G * keep) / nA;
+                }
+                buf[brow + x] = (nA << 24) | (nG * 0x010101);
+            }
+        }
+        cur().bmp.setPixels(buf, 0, w, r.left, r.top, w, h);
+        if (strokeDirty.isEmpty()) strokeDirty.set(r); else strokeDirty.union(r);
+        r.setEmpty();
         cur().dirty = true;
         invalidate();
     }
 
-    private Rect dirtyRect() {
-        Rect r = new Rect();
-        dirty.roundOut(r);
-        r.inset(-2, -2);
-        return r.intersect(0, 0, docW, docH) ? r : null;
+    private void clearMask(Rect r) {
+        for (int y = r.top; y < r.bottom; y++)
+            java.util.Arrays.fill(mask, y * docW + r.left, y * docW + r.right, (byte) 0);
     }
 
     private void commitStroke() {
         stroking = false;
-        Rect r = dirtyRect();
-        if (r == null) return;
+        Rect r = new Rect(strokeDirty);
+        if (r.isEmpty()) return;
+        clearMask(r);
         // "before" pixels come from the backup copy
         Layer l = cur();
         Bitmap real = l.bmp;
@@ -284,8 +398,12 @@ public class CanvasView extends View {
     private void abortStroke() {
         if (!stroking) return;
         stroking = false;
-        Rect r = dirtyRect();
-        if (r != null) new Canvas(cur().bmp).drawBitmap(backup, r, r, copy);
+        flush();
+        Rect r = strokeDirty;
+        if (!r.isEmpty()) {
+            clearMask(r);
+            new Canvas(cur().bmp).drawBitmap(backup, r, r, copy);
+        }
         invalidate();
     }
 
