@@ -22,8 +22,8 @@ import java.util.zip.Deflater;
 import java.util.zip.Inflater;
 
 /**
- * Layered black-and-white canvas. Layers are ARGB bitmaps holding only greys
- * (black ink, white ink, transparency). Undo stores compressed "before" pixels
+ * Layered greyscale canvas. Layers are ARGB bitmaps holding only greys
+ * (plus transparency). Undo stores compressed "before" pixels
  * of the changed rectangle, so 100 steps fit in little memory.
  */
 public class CanvasView extends View {
@@ -68,7 +68,7 @@ public class CanvasView extends View {
     public Runnable onChange;
 
     public int tool = DRAW;
-    public boolean white;                // ink colour
+    public int grey = 0;                 // ink: 0 = black .. 255 = white
     public float size = 12f;
     private boolean stylusSeen;
 
@@ -215,7 +215,7 @@ public class CanvasView extends View {
                 boolean erase = tool == ERASE || type == MotionEvent.TOOL_TYPE_ERASER
                         || (e.getButtonState() & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0;
                 pen.setXfermode(erase ? clearMode : null);
-                pen.setColor(white ? Color.WHITE : Color.BLACK);
+                pen.setColor(Color.rgb(grey, grey, grey));
                 strokeCanvas = new Canvas(cur().bmp);
                 stroking = true;
                 map(e.getX(), e.getY());

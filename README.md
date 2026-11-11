@@ -1,13 +1,13 @@
 # Inkwell
 
-A tiny black-and-white drawing app for Android (built for Pixel Fold). No libraries, plain Java.
+A tiny greyscale drawing app for Android (built for Pixel Fold). No libraries, plain Java.
 
 ## Install on your phone
 1. On the phone, open the repo's **Releases** page → **Latest build** → tap `inkwell.apk`.
 2. Allow "install unknown apps" for your browser when asked. Install.
 
 ## Use
-- **Brush / Erase / Move**: pick a tool. **● Black / ● White** switches ink colour. Slider = size.
+- **Brush / Erase / Move**: pick a tool. **Ink** button picks any grey (slider + swatches, black to white). Slider = size.
 - Stylus pressure changes line width. Stylus eraser end or side button erases.
 - **Two fingers**: pinch to zoom, drag to pan, twist to rotate. **Fit** resets the view.
 - **Two-finger tap** = undo, **three-finger tap** = redo. Up to 100 steps.

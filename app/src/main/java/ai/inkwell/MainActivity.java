@@ -71,7 +71,7 @@ public class MainActivity extends Activity {
         brushBtn = button(bar, "Brush", v -> setTool(CanvasView.DRAW));
         eraseBtn = button(bar, "Erase", v -> setTool(CanvasView.ERASE));
         moveBtn = button(bar, "Move", v -> setTool(CanvasView.MOVE));
-        colorBtn = button(bar, "", v -> { canvas.white = !canvas.white; updateColor(); });
+        colorBtn = button(bar, "", v -> pickGrey());
         SeekBar sizeBar = new SeekBar(this);
         sizeBar.setMax(149);
         sizeBar.setProgress((int) canvas.size - 1);
@@ -207,7 +207,46 @@ public class MainActivity extends Activity {
     }
 
     private void updateColor() {
-        colorBtn.setText(canvas.white ? "● White" : "● Black");
+        int g = canvas.grey;
+        colorBtn.setText("Ink " + Math.round((255 - g) * 100 / 255f) + "%");
+        colorBtn.setBackgroundColor(Color.rgb(g, g, g));
+        colorBtn.setTextColor(g > 110 ? Color.BLACK : Color.WHITE);
+    }
+
+    /** Grey picker: slider (black..white) plus quick swatches. */
+    private void pickGrey() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int p = (int) (16 * dp);
+        box.setPadding(p, p, p, p);
+        View preview = new View(this);
+        box.addView(preview, new LinearLayout.LayoutParams(-1, (int) (48 * dp)));
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(255);
+        Runnable show = () -> {
+            int g = 255 - sb.getProgress();
+            preview.setBackgroundColor(Color.rgb(g, g, g));
+            canvas.grey = g;
+            updateColor();
+        };
+        sb.setProgress(255 - canvas.grey);
+        sb.setOnSeekBarChangeListener(new Slider() {
+            public void onProgressChanged(SeekBar s, int v, boolean u) { show.run(); }
+        });
+        box.addView(sb, new LinearLayout.LayoutParams(-1, (int) (48 * dp)));
+        LinearLayout sw = new LinearLayout(this);
+        for (int i = 0; i <= 8; i++) {
+            int g = Math.min(255, i * 32);
+            View v = new View(this);
+            v.setBackgroundColor(Color.rgb(g, g, g));
+            v.setOnClickListener(x -> sb.setProgress(255 - g));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, (int) (40 * dp), 1f);
+            lp.setMargins(2, 2, 2, 2);
+            sw.addView(v, lp);
+        }
+        box.addView(sw);
+        show.run();
+        new AlertDialog.Builder(this).setTitle("Ink grey").setView(box).setPositiveButton("Done", null).show();
     }
 
     private void confirm(String msg, Runnable yes) {
