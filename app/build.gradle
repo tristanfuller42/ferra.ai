@@ -26,4 +26,11 @@ android {
     }
     dependenciesInfo { includeInApk false; includeInBundle false }
     packaging { resources { excludes += ["**"] } }
+    testOptions { unitTests { includeAndroidResources = true; all { jvmArgs "-Xmx3g", "--add-opens=java.base/java.io=ALL-UNNAMED", "--add-opens=java.base/java.lang=ALL-UNNAMED"; systemProperty "robolectric.graphicsMode", "NATIVE" } } }
+}
+
+dependencies {
+    // Tests only (not in the app): run the real app on the JVM with real Android graphics
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.robolectric:robolectric:4.14.1"
 }

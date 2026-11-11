@@ -95,6 +95,7 @@ public class CanvasView extends View {
     public int grey = 0;                 // ink: 0 = black .. 255 = white
     public float size = 12f;
     private boolean stylusSeen;
+    public boolean fingerPaint;          // false = once a stylus is used, fingers only navigate (palm rejection)
 
     private final Paint layerPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final Paint copy = new Paint();
@@ -231,7 +232,7 @@ public class CanvasView extends View {
         super(c);
         copy.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC));
         paper.setColor(Color.WHITE);
-        setBackgroundColor(0xFF2A2A2A);
+        setBackgroundColor(0xFF161618);
     }
 
     // ---------- Document ----------
@@ -635,7 +636,7 @@ public class CanvasView extends View {
         }
         if (selOverlay != null) { // dim what is NOT selected
             Paint o = new Paint(Paint.FILTER_BITMAP_FLAG);
-            o.setColor(0x663D9BFF);
+            o.setColor(0x403D9BFF);
             c.drawBitmap(selOverlay, 0, 0, o);
         }
         if (selPath != null) {
@@ -812,7 +813,7 @@ public class CanvasView extends View {
         if (e.getPointerCount() >= 2 || gesture) return handleGesture(e, action, view);
         if (tool == SELECT) return selectTouch(e, action);
         if (tool == ADJUST) return adjustTouch(e, action);
-        if (stylusSeen && type == MotionEvent.TOOL_TYPE_FINGER) return handleGesture(e, action, view);
+        if (stylusSeen && !fingerPaint && type == MotionEvent.TOOL_TYPE_FINGER) return handleGesture(e, action, view);
         if (tool == LIQUIFY) return liquifyTouch(e, action);
         if (tool == CLONE && action == MotionEvent.ACTION_DOWN && (!cloneSet || cloneArmed)) {
             view.invert(inverse);
@@ -2287,6 +2288,27 @@ public class CanvasView extends View {
         boolean ok = k == n && in.finished();
         in.end();
         return ok ? out : null;
+    }
+
+    /** Renders a sample S-stroke with the brush, pressure rising then falling, in white. */
+    public static Bitmap brushPreview(Context ctx, Brush b, int w, int h) {
+        CanvasView v = new CanvasView(ctx);
+        v.setDocument(w, h, new ArrayList<>());
+        v.brush = b;
+        v.grey = 255;
+        v.size = h * 0.34f;
+        v.penInput = true;
+        v.stroking = true;
+        int n = 60;
+        for (int i = 0; i <= n; i++) {
+            float t = i / (float) n;
+            float x = w * (0.06f + 0.88f * t), y = h * (0.5f + 0.22f * (float) Math.sin(t * Math.PI * 2));
+            float p = (float) Math.sin(t * Math.PI);
+            if (i == 0) v.startAt(x, y, p); else v.segmentTo(x, y, p);
+        }
+        v.flush();
+        v.stroking = false;
+        return v.cur().bmp;
     }
 
     // ---------- Pixel packing for undo ----------

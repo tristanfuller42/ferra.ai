@@ -66,11 +66,12 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
         dp = getResources().getDisplayMetrics().density;
         autosave = new File(getFilesDir(), "autosave.psd");
 
         canvas = new CanvasView(this);
-        Rect max = getWindowManager().getMaximumWindowMetrics().getBounds();
+        Rect max = screenBounds();
         newDocument(Math.min(max.width(), max.height()), Math.max(max.width(), max.height()));
         canvas.onChange = this::refreshPanel;
         canvas.onGreyPicked = this::updateColor;
@@ -240,6 +241,7 @@ public class MainActivity extends Activity {
         canvas.onFrame = () -> { if (refView != null && refView.getVisibility() == View.VISIBLE && refMode == 0) refContent.invalidate(); };
         prefs = getSharedPreferences("inkwell", MODE_PRIVATE);
         tlOn = prefs.getBoolean("timelapse", true);
+        canvas.fingerPaint = prefs.getBoolean("fingerPaint", false);
         gdir = new File(getFilesDir(), "gallery");
         gdir.mkdirs();
         if (autosave.exists()) { // move the pre-gallery drawing into the gallery
@@ -268,6 +270,16 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /** Largest window this device can show (Fold unfolded); falls back to the display size. */
+    private Rect screenBounds() {
+        Rect r = getWindowManager().getMaximumWindowMetrics().getBounds();
+        if (r.width() < 16 || r.height() < 16) {
+            android.util.DisplayMetrics m = getResources().getDisplayMetrics();
+            r = new Rect(0, 0, Math.max(720, m.widthPixels), Math.max(1280, m.heightPixels));
+        }
+        return r;
+    }
+
     private abstract static class Slider implements SeekBar.OnSeekBarChangeListener {
         public void onStartTrackingTouch(SeekBar s) { }
         public void onStopTrackingTouch(SeekBar s) { }
@@ -275,7 +287,7 @@ public class MainActivity extends Activity {
 
     /** New drawing or resize, with size presets. */
     private void canvasDialog() {
-        Rect scr = getWindowManager().getMaximumWindowMetrics().getBounds();
+        Rect scr = screenBounds();
         int sw = Math.min(scr.width(), scr.height()), sh = Math.max(scr.width(), scr.height());
         Object[][] presets = {
             {"This screen", sw, sh},
@@ -432,6 +444,7 @@ public class MainActivity extends Activity {
         moveBtn.setOn(t == CanvasView.MOVE);
         selectBtn.setOn(t == CanvasView.SELECT);
         adjustBtn.setOn(t == CanvasView.ADJUST || t == CanvasView.LIQUIFY || t == CanvasView.CLONE);
+        if (bottom == null) return; // still building the screen
         if (t == CanvasView.SELECT) showSelectBar();
         else if (t == CanvasView.MOVE) showTransformBar();
         else if (t != CanvasView.ADJUST && t != CanvasView.LIQUIFY && t != CanvasView.CLONE) bottom.setVisibility(View.GONE);
@@ -890,6 +903,7 @@ public class MainActivity extends Activity {
         mm.add(0, 12, 5, (canvas.anim ? "✓ " : "") + "Animation Assist");
         mm.add(0, 13, 5, "Time-lapse…");
         mm.add(0, 7, 6, "Sidebar on " + (sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL) ? "right" : "left"));
+        mm.add(0, 14, 7, (canvas.fingerPaint ? "✓ " : "") + "Finger paints when using a stylus");
         mm.add(0, 8, 7, "Gestures help");
         m.setOnMenuItemClickListener(it -> {
             int id = it.getItemId();
@@ -905,6 +919,11 @@ public class MainActivity extends Activity {
                 case 11: toggleReference(); break;
                 case 12: toggleAnimation(); break;
                 case 13: timelapseMenu(anchor); break;
+                case 14:
+                    canvas.fingerPaint = !canvas.fingerPaint;
+                    prefs.edit().putBoolean("fingerPaint", canvas.fingerPaint).apply();
+                    toast(canvas.fingerPaint ? "Fingers paint too" : "Palm rejection: with a stylus, fingers only move the canvas");
+                    break;
                 case 7:
                     sideLp.gravity = sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL)
                             ? Gravity.END | Gravity.CENTER_VERTICAL : Gravity.START | Gravity.CENTER_VERTICAL;
@@ -954,13 +973,19 @@ public class MainActivity extends Activity {
         box.setPadding(p, p, p, p);
         AlertDialog[] dlg = new AlertDialog[1];
         for (CanvasView.Brush br : CanvasView.BRUSHES) {
-            TextView t = new TextView(this);
-            t.setText(br.name);
-            t.setTextSize(17);
-            t.setPadding(p, p, p, p);
+            LinearLayout t = new LinearLayout(this); // like Procreate's Brush Library: name + stroke preview
+            t.setOrientation(LinearLayout.VERTICAL);
+            t.setPadding(p, p / 2, p, p / 2);
             boolean on = br == canvas.brush;
-            t.setBackgroundColor(on ? Color.BLACK : 0);
-            t.setTextColor(on ? Color.WHITE : Color.BLACK);
+            t.setBackgroundColor(on ? Ui.ACCENT : 0);
+            TextView nm = new TextView(this);
+            nm.setText(br.name);
+            nm.setTextSize(15);
+            nm.setTextColor(on ? Color.WHITE : 0xFFE8E8E8);
+            t.addView(nm);
+            ImageView pv = new ImageView(this);
+            pv.setImageBitmap(brushPreview(br));
+            t.addView(pv, new LinearLayout.LayoutParams((int) (240 * dp), (int) (36 * dp)));
             t.setOnClickListener(v -> { canvas.brush = br; updateBrush(); dlg[0].dismiss(); });
             if (br.file != null) t.setOnLongClickListener(v -> {
                 confirm("Delete brush \"" + br.name + "\"?", () -> {
@@ -976,6 +1001,7 @@ public class MainActivity extends Activity {
         }
         TextView ol = new TextView(this);
         ol.setText("Brush opacity");
+        ol.setTextColor(0xFF9A9A9E);
         ol.setPadding(p, p, p, 0);
         box.addView(ol);
         SeekBar sb = new SeekBar(this);
@@ -986,8 +1012,8 @@ public class MainActivity extends Activity {
         });
         box.addView(sb, new LinearLayout.LayoutParams(-1, (int) (48 * dp)));
         TextView imp = new TextView(this);
-        imp.setText("+ Import brushes (Procreate .brush/.brushset, Photoshop .abr)");
-        imp.setTextColor(Color.BLACK);
+        imp.setText("＋ Import brushes (Procreate .brush/.brushset, Photoshop .abr)");
+        imp.setTextColor(Ui.ACCENT);
         imp.setPadding(p, p, p, p);
         imp.setOnClickListener(v -> {
             dlg[0].dismiss();
@@ -1002,6 +1028,18 @@ public class MainActivity extends Activity {
         ScrollView sv = new ScrollView(this);
         sv.addView(box);
         dlg[0] = new AlertDialog.Builder(this).setTitle("Brushes").setView(sv).setPositiveButton("Done", null).show();
+    }
+
+    private final java.util.HashMap<CanvasView.Brush, Bitmap> previews = new java.util.HashMap<>();
+
+    /** A sample stroke drawn with the brush itself (white ink for the dark library). */
+    private Bitmap brushPreview(CanvasView.Brush b) {
+        Bitmap bm = previews.get(b);
+        if (bm == null) {
+            bm = CanvasView.brushPreview(this, b, (int) (240 * dp), (int) (36 * dp));
+            previews.put(b, bm);
+        }
+        return bm;
     }
 
     private void updateBrush() { brushName.setText(canvas.brush.name); }
@@ -1066,7 +1104,11 @@ public class MainActivity extends Activity {
 
     private Bitmap thumbOf(CanvasView.Layer l, int tw, int th) {
         if (l.dirty || l.thumb == null || l.thumb.getWidth() != tw) {
-            l.thumb = Bitmap.createScaledBitmap(l.bmp, tw, th, true);
+            Bitmap t = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(t);
+            c.drawColor(Color.WHITE);
+            c.drawBitmap(l.bmp, null, new Rect(0, 0, tw, th), new Paint(Paint.FILTER_BITMAP_FLAG));
+            l.thumb = t;
             l.dirty = false;
         }
         return l.thumb;
@@ -1211,17 +1253,16 @@ public class MainActivity extends Activity {
             refView.setPadding((int) (4 * dp), 0, (int) (4 * dp), (int) (4 * dp));
             LinearLayout head = new LinearLayout(this);
             head.setGravity(Gravity.CENTER_VERTICAL);
-            TextView t = new TextView(this);
-            t.setText("  Reference");
-            t.setTextColor(Color.WHITE);
-            head.addView(t, new LinearLayout.LayoutParams(0, -1, 1f));
             TextView cv = chip(head, "Canvas", refMode == 0, null), im = chip(head, "Image", refMode == 1, null);
+            View gap = new View(this);
+            head.addView(gap, new LinearLayout.LayoutParams(0, 1, 1f));
             cv.setOnClickListener(v -> { refMode = 0; toggleReference(); toggleReference(); });
             im.setOnClickListener(v -> {
                 if (refImage == null) { openDoc(REQ_REF); return; }
                 refMode = 1; toggleReference(); toggleReference();
             });
             TextView rs = chip(head, "⤡", false, null);
+            rs.setTextSize(20);
             TextView x = chip(head, "✕", false, v -> refView.setVisibility(View.GONE));
             head.setOnTouchListener(dragMove(refView));
             rs.setOnTouchListener(dragResize(refView));
@@ -1256,7 +1297,7 @@ public class MainActivity extends Activity {
                 return true;
             });
             refView.addView(refContent, new LinearLayout.LayoutParams(-1, 0, 1f));
-            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int) (220 * dp), (int) (260 * dp), Gravity.TOP | Gravity.START);
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int) (280 * dp), (int) (300 * dp), Gravity.TOP | Gravity.START);
             lp.setMargins((int) (60 * dp), (int) (60 * dp), 0, 0);
             stage.addView(refView, lp);
             return;
@@ -1580,6 +1621,8 @@ public class MainActivity extends Activity {
                         prefs.edit().putString("cur", curId).apply();
                         String fname = displayName(uri);
                         if (fname != null) setName(curId, fname);
+                        if (d.layers.size() == 1 && d.groups.isEmpty()) // flat image: add a blank layer to draw on
+                            d.layers.add(new CanvasView.Layer(Bitmap.createBitmap(d.w, d.h, Bitmap.Config.ARGB_8888), "Layer 2"));
                         canvas.setDocument(d.w, d.h, d.layers);
                         canvas.setGroups(d.groups);
                         savedSel.clear();
@@ -1639,7 +1682,6 @@ public class MainActivity extends Activity {
         new Canvas(g).drawBitmap(img, 0, 0, p);
         img.recycle();
         d.layers.add(new CanvasView.Layer(g, name));
-        d.layers.add(new CanvasView.Layer(Bitmap.createBitmap(d.w, d.h, Bitmap.Config.ARGB_8888), "Layer 2"));
         return d;
     }
 
@@ -1674,8 +1716,12 @@ public class MainActivity extends Activity {
                     case 2: flat.compress(Bitmap.CompressFormat.WEBP_LOSSLESS, 100, o); break;
                     case 3: {
                         PdfDocument pdf = new PdfDocument();
-                        PdfDocument.Page pg = pdf.startPage(new PdfDocument.PageInfo.Builder(w, h, 1).create());
-                        pg.getCanvas().drawBitmap(flat, 0, 0, null);
+                        // page size as if printed at 300 dpi (points are 1/72 inch); the image keeps full resolution
+                        float k = 72f / 300f;
+                        PdfDocument.Page pg = pdf.startPage(new PdfDocument.PageInfo.Builder(
+                                Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)), 1).create());
+                        pg.getCanvas().scale(k, k);
+                        pg.getCanvas().drawBitmap(flat, 0, 0, new Paint(Paint.FILTER_BITMAP_FLAG));
                         pdf.finishPage(pg);
                         pdf.writeTo(o);
                         pdf.close();
@@ -1883,7 +1929,7 @@ public class MainActivity extends Activity {
     }
 
     private void newMenu(View anchor) {
-        Rect scr = getWindowManager().getMaximumWindowMetrics().getBounds();
+        Rect scr = screenBounds();
         int sw = Math.min(scr.width(), scr.height()), sh = Math.max(scr.width(), scr.height());
         int[][] sizes = {{sw, sh}, {sh, sw}, {2048, 2048}, {2048, 2732}, {2480, 3508}, {2550, 3300}, {1988, 3075}, {1920, 1080}, {3840, 2160}, {1080, 1350}};
         String[] names = {"Screen size", "Screen size (landscape)", "Square", "iPad Procreate default", "A4 @ 300 dpi", "US Letter @ 300 dpi",
@@ -1933,7 +1979,7 @@ public class MainActivity extends Activity {
                         if (tl != null) for (File f : tl) f.delete();
                         tlDir(id).delete();
                         if (id.equals(curId)) { // keep a valid open drawing
-                            Rect scr = getWindowManager().getMaximumWindowMetrics().getBounds();
+                            Rect scr = screenBounds();
                             curId = newId();
                             prefs.edit().putString("cur", curId).apply();
                             newDocument(Math.min(scr.width(), scr.height()), Math.max(scr.width(), scr.height()));
@@ -1950,10 +1996,15 @@ public class MainActivity extends Activity {
 
     // ---------- Time-lapse ----------
 
+    private long tlLast;
+
     private void captureTimelapse() {
         if (!tlOn || tlBusy || !loaded || curId == null) return;
+        long now = android.os.SystemClock.uptimeMillis();
+        if (now - tlLast < 250) return; // keep drawing smooth during rapid strokes
+        tlLast = now;
         tlBusy = true;
-        Bitmap b = canvas.renderSmall(1280);
+        Bitmap b = canvas.renderSmall(1080);
         File dir = tlDir(curId);
         new Thread(() -> {
             dir.mkdirs();

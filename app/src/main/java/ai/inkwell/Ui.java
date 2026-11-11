@@ -11,7 +11,7 @@ import android.view.View;
 
 /** Tiny hand-drawn UI pieces: icon buttons and a vertical slider. No image assets. */
 final class Ui {
-    static final int BAR = 0xFF1C1C1E, PANEL = 0xF02C2C2E, ACCENT = 0xFF3D9BFF, ICON = 0xFFE8E8E8;
+    static final int BAR = 0xFF1C1C1E, PANEL = 0xFF3A3A3C, ACCENT = 0xFF3D9BFF, ICON = 0xFFE8E8E8;
 
     static final int MENU = 0, MOVE = 1, BRUSH = 2, ERASER = 3, LAYERS = 4, UNDO = 5, REDO = 6, PICK = 7, COLOR = 8, ADJUST = 9, SELECT = 10, SMUDGE = 11;
 
