@@ -25,7 +25,22 @@ Layout matches Procreate so you can switch between the two easily:
 - **Layers**: tap the selected layer for options: rename, select, copy, fill, clear, alpha lock, clipping mask,
   invert, merge down, blend mode (12 modes), delete. Tap the letter on a layer to change its blend mode.
 - **Text**: Actions → Add text.
-- **Drawing guides**: 2D grid; symmetry vertical, horizontal, quadrant, radial.
+- **Drawing guides**: 2D grid, isometric, perspective (1/2/3-point, drag the vanishing points); symmetry vertical,
+  horizontal, quadrant, radial. **Drawing assist** locks strokes to the guide lines.
+- **Transform modes**: Uniform, Freeform (stretch with edge/corner handles), Distort, Warp (4×4 mesh).
+- **Layer masks**: layer options → Add mask; tap the mask thumbnail to paint it (black hides, white shows).
+  Apply, disable or delete the mask. Saved in PSD.
+- **Layer groups**: Group with layer below / New group; collapse, hide, rename, group opacity, flatten. Saved in PSD.
+- **Selections**: Save and Load in the selection bar (kept with each drawing).
+- **Reference window**: Actions → Reference. Shows the whole canvas live, or an imported image (tap it to pick a grey).
+  Drag the title to move, ⤡ to resize.
+- **Time-lapse**: every stroke is recorded. Actions → Time-lapse → replay, or export MP4 (full length or 30 seconds).
+- **Animation Assist**: Actions → Animation Assist. Each layer is a frame; timeline with play, onion skins,
+  frames per second, background layer; export animated GIF or MP4.
+
+### Gallery
+Inkwell opens in the Gallery like Procreate. ＋ New (size presets), Import (any supported file), tap to open,
+long-press to rename, duplicate or delete. Drawings save automatically.
 
 - **Brushes**: tap the active brush button (or Erase) again to pick a brush and set brush opacity.
   - Size only from pressure: Ink pen, Brush pen (strong taper), Fine liner (no pressure), Marker (see-through).
@@ -49,7 +64,6 @@ Layout matches Procreate so you can switch between the two easily:
 - **Layers**: add, copy, delete, reorder, merge down, clear, hide/show, opacity.
 - Once a stylus is used, single fingers only pan (palm rejection).
 - **Canvas**: start a new drawing at any size (presets: screen, square, A4/Letter/A5 at 300 dpi, comic page, HD, 4K, Instagram, or custom), or resize the current one (scale artwork, or crop/extend). Max about 9 megapixels.
-- Drawing autosaves (with layers) when you leave the app.
 
 ## Files
 - **Open / Import as layer**: PSD (layers kept), PNG, JPEG, WebP, HEIC, AVIF, GIF, BMP, PDF (page 1).

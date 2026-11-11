@@ -39,12 +39,18 @@ import java.io.OutputStream;
 
 public class MainActivity extends Activity {
     private static final long MAX_PIXELS = 3000L * 3000L;
-    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_BRUSH = 3, REQ_EXPORT = 10;
+    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_BRUSH = 3, REQ_REF = 4, REQ_TL = 5, REQ_GIF = 6, REQ_AMP4 = 7, REQ_GALLERY = 8, REQ_EXPORT = 10;
     private static final String[] FORMATS = {"PNG", "JPEG", "WebP", "PDF", "PSD (layers)"};
     private static final String[] MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf", "image/vnd.adobe.photoshop"};
     private static final String[] EXTS = {"png", "jpg", "webp", "pdf", "psd"};
 
     private CanvasView canvas;
+    private FrameLayout shell, stage;
+    private LinearLayout timeline;
+    private android.content.SharedPreferences prefs;
+    private File gdir;
+    private String curId;
+    private boolean tlOn, tlBusy;
     private Ui.Icon brushBtn, eraseBtn, moveBtn, colorBtn, layersBtn, pickBtn, smudgeBtn, adjustBtn, selectBtn;
     private LinearLayout bottom;
     private TextView brushName;
@@ -74,6 +80,8 @@ public class MainActivity extends Activity {
         LinearLayout left = new LinearLayout(this), right = new LinearLayout(this);
         left.setGravity(Gravity.CENTER_VERTICAL);
         right.setGravity(Gravity.CENTER_VERTICAL);
+        TextView gal = button(left, "Gallery", v -> showGallery());
+        gal.setTextSize(15);
         icon(left, Ui.MENU, ib, this::actionsMenu);
         adjustBtn = icon(left, Ui.ADJUST, ib, this::adjustMenu);
         selectBtn = icon(left, Ui.SELECT, ib, v -> setTool(canvas.tool == CanvasView.SELECT ? CanvasView.DRAW : CanvasView.SELECT));
@@ -206,12 +214,20 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.BLACK);
         root.addView(top, new LinearLayout.LayoutParams(-1, ib));
         root.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1f));
-        root.setOnApplyWindowInsetsListener((v, in) -> {
+        timeline = new LinearLayout(this);
+        timeline.setOrientation(LinearLayout.VERTICAL);
+        timeline.setBackgroundColor(Ui.BAR);
+        timeline.setVisibility(View.GONE);
+        root.addView(timeline, new LinearLayout.LayoutParams(-1, -2));
+        this.stage = stage;
+        shell = new FrameLayout(this);
+        shell.addView(root);
+        shell.setOnApplyWindowInsetsListener((v, in) -> {
             Insets i = in.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
             v.setPadding(i.left, i.top, i.right, i.bottom);
             return WindowInsets.CONSUMED;
         });
-        setContentView(root);
+        setContentView(shell);
         canvas.onToggleUi = () -> { // four-finger tap: hide/show toolbar and panel
             boolean show = scroll.getVisibility() != View.VISIBLE;
             scroll.setVisibility(show ? View.VISIBLE : View.GONE);
@@ -220,17 +236,33 @@ public class MainActivity extends Activity {
         };
 
         loadBrushes();
-        // Restore last drawing, then handle "Open with" / "Share" intents
+        canvas.onCommitted = this::captureTimelapse;
+        canvas.onFrame = () -> { if (refView != null && refView.getVisibility() == View.VISIBLE && refMode == 0) refContent.invalidate(); };
+        prefs = getSharedPreferences("inkwell", MODE_PRIVATE);
+        tlOn = prefs.getBoolean("timelapse", true);
+        gdir = new File(getFilesDir(), "gallery");
+        gdir.mkdirs();
+        if (autosave.exists()) { // move the pre-gallery drawing into the gallery
+            String id = newId();
+            autosave.renameTo(docFile(id));
+            prefs.edit().putString("cur", id).apply();
+        }
+        curId = prefs.getString("cur", null);
+        if (curId != null && !docFile(curId).exists()) curId = null;
+        // Open the last drawing, then show the gallery (like Procreate) and handle "Open with" / "Share"
         new Thread(() -> {
             Psd.Doc d = null;
-            if (autosave.exists()) {
-                try (InputStream in = new FileInputStream(autosave)) { d = Psd.read(in, MAX_PIXELS); }
+            if (curId != null) {
+                try (InputStream in = new FileInputStream(docFile(curId))) { d = Psd.read(in, MAX_PIXELS); }
                 catch (Throwable ignored) { }
             }
             Psd.Doc fd = d;
             runOnUiThread(() -> {
-                if (fd != null) canvas.setDocument(fd.w, fd.h, fd.layers);
+                if (fd != null) { canvas.setDocument(fd.w, fd.h, fd.layers); canvas.setGroups(fd.groups); }
+                if (curId == null) { curId = newId(); prefs.edit().putString("cur", curId).apply(); }
+                loadSelections();
                 loaded = true;
+                if (b == null) showGallery();
                 handleIntent(getIntent());
             });
         }).start();
@@ -448,6 +480,8 @@ public class MainActivity extends Activity {
         chip(b, "Cut & Paste", false, v -> { if (!canvas.copyPaste(true)) full(); });
         chip(b, "Feather", false, v -> featherDialog());
         chip(b, "Clear", false, v -> canvas.clearSelection());
+        chip(b, "Save", false, v -> saveSelection());
+        chip(b, "Load", false, this::loadSelectionMenu);
         showBar(a, b);
     }
 
@@ -461,8 +495,11 @@ public class MainActivity extends Activity {
 
     private void showTransformBar() {
         LinearLayout a = barRow();
-        chip(a, "Uniform", !canvas.distort, v -> { canvas.distort = false; showTransformBar(); canvas.invalidate(); });
-        chip(a, "Distort", canvas.distort, v -> { canvas.distort = true; canvas.beginMove(); showTransformBar(); });
+        String[] modes = {"Uniform", "Freeform", "Distort", "Warp"};
+        for (int i = 0; i < modes.length; i++) {
+            int k = i;
+            chip(a, modes[i], canvas.xform == i, v -> { canvas.setXform(k); showTransformBar(); });
+        }
         chip(a, "Flip H", false, v -> canvas.flip(true));
         chip(a, "Flip V", false, v -> canvas.flip(false));
         chip(a, "Rotate 90°", false, v -> canvas.rotate90());
@@ -704,6 +741,16 @@ public class MainActivity extends Activity {
         android.view.SubMenu bm = mm.addSubMenu(0, 10, 9, "Blend mode: " + CanvasView.BLEND_NAMES[l.blend]);
         for (int i = 0; i < CanvasView.BLEND_NAMES.length; i++) bm.add(1, 100 + i, i, CanvasView.BLEND_NAMES[i]);
         mm.add(0, 11, 10, "Delete");
+        if (l.mask == null) mm.add(0, 20, 11, "Add mask");
+        else {
+            mm.add(0, 21, 11, l.editMask ? "Edit layer (not mask)" : "Edit mask");
+            mm.add(0, 22, 12, "Apply mask");
+            mm.add(0, 23, 13, (l.maskOn ? "Disable" : "Enable") + " mask");
+            mm.add(0, 24, 14, "Delete mask");
+        }
+        mm.add(0, 25, 15, "Group with layer below");
+        mm.add(0, 26, 16, "New group");
+        if (l.group != 0) mm.add(0, 27, 17, "Remove from group");
         m.setOnMenuItemClickListener(it -> {
             int id = it.getItemId();
             if (id >= 100) { canvas.setBlend(idx, id - 100); return true; }
@@ -725,6 +772,14 @@ public class MainActivity extends Activity {
                 case 8: canvas.invertLayer(); break;
                 case 9: canvas.mergeDown(); break;
                 case 11: confirm("Delete this layer?", canvas::deleteLayer); break;
+                case 20: canvas.addMask(); toast("Mask added: paint black to hide, white to show"); break;
+                case 21: canvas.editMask(!l.editMask); break;
+                case 22: canvas.applyMask(); break;
+                case 23: l.maskOn = !l.maskOn; canvas.invalidate(); refreshPanel(); break;
+                case 24: canvas.deleteMask(); break;
+                case 25: canvas.groupWithBelow(); break;
+                case 26: canvas.newGroup(); break;
+                case 27: canvas.ungroup(); break;
             }
             return true;
         });
@@ -770,21 +825,45 @@ public class MainActivity extends Activity {
 
     private void guideMenu(View anchor) {
         PopupMenu m = new PopupMenu(this, anchor);
-        String[] g = {"Off", "2D grid", "Symmetry: vertical", "Symmetry: horizontal", "Symmetry: quadrant", "Symmetry: radial (8)"};
+        String[] g = {"Off", "2D grid", "Symmetry: vertical", "Symmetry: horizontal", "Symmetry: quadrant", "Symmetry: radial (8)",
+                "Isometric", "Perspective: 1-point", "Perspective: 2-point", "Perspective: 3-point"};
         for (int i = 0; i < g.length; i++) m.getMenu().add(0, i, i, (canvas.guide == i ? "✓ " : "") + g[i]);
+        m.getMenu().add(0, 50, 50, (canvas.assist ? "✓ " : "") + "Drawing assist (lock strokes to the guide)");
+        m.getMenu().add(0, 51, 51, "Grid / isometric spacing…");
+        m.getMenu().add(0, 52, 52, "Move vanishing points…");
         m.setOnMenuItemClickListener(it -> {
-            canvas.guide = it.getItemId();
-            if (canvas.guide == 1) {
+            int id = it.getItemId();
+            if (id == 50) { canvas.assist = !canvas.assist; return true; }
+            if (id == 51) {
                 android.widget.EditText et = new android.widget.EditText(this);
                 et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
                 et.setText(String.valueOf(canvas.gridSize));
-                new AlertDialog.Builder(this).setTitle("Grid size (pixels)").setView(et)
+                new AlertDialog.Builder(this).setTitle("Spacing (pixels)").setView(et)
                         .setPositiveButton("OK", (d, w) -> { canvas.gridSize = Math.max(8, parse(et)); canvas.invalidate(); }).show();
+                return true;
             }
+            if (id == 52) { editVanishingPoints(); return true; }
+            canvas.guide = id;
+            if (id >= 7) { canvas.resetVps(); editVanishingPoints(); }
             canvas.invalidate();
             return true;
         });
         m.show();
+    }
+
+    private void editVanishingPoints() {
+        if (canvas.guide < 7) { toast("Choose a perspective guide first"); return; }
+        canvas.editGuide = true;
+        canvas.invalidate();
+        LinearLayout a = barRow();
+        TextView t = new TextView(this);
+        t.setText("Drag the vanishing points. ");
+        t.setTextColor(Color.WHITE);
+        a.addView(t);
+        chip(a, (canvas.assist ? "✓ " : "") + "Assist", canvas.assist, v -> { canvas.assist = !canvas.assist; editVanishingPoints(); });
+        chip(a, "Reset", false, v -> canvas.resetVps());
+        chip(a, "Done", true, v -> { canvas.editGuide = false; canvas.invalidate(); bottom.setVisibility(View.GONE); });
+        showBar(a);
     }
 
     private Ui.Icon icon(LinearLayout parent, int kind, int size, View.OnClickListener l) {
@@ -807,6 +886,9 @@ public class MainActivity extends Activity {
         mm.add(0, 6, 5, "Import brushes…");
         mm.add(0, 9, 5, "Add text…");
         mm.add(0, 10, 5, "Drawing guide / symmetry…");
+        mm.add(0, 11, 5, (refView != null && refView.getVisibility() == View.VISIBLE ? "✓ " : "") + "Reference window");
+        mm.add(0, 12, 5, (canvas.anim ? "✓ " : "") + "Animation Assist");
+        mm.add(0, 13, 5, "Time-lapse…");
         mm.add(0, 7, 6, "Sidebar on " + (sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL) ? "right" : "left"));
         mm.add(0, 8, 7, "Gestures help");
         m.setOnMenuItemClickListener(it -> {
@@ -820,6 +902,9 @@ public class MainActivity extends Activity {
                 case 6: openDoc(REQ_BRUSH); break;
                 case 9: textDialog(); break;
                 case 10: guideMenu(anchor); break;
+                case 11: toggleReference(); break;
+                case 12: toggleAnimation(); break;
+                case 13: timelapseMenu(anchor); break;
                 case 7:
                     sideLp.gravity = sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL)
                             ? Gravity.END | Gravity.CENTER_VERTICAL : Gravity.START | Gravity.CENTER_VERTICAL;
@@ -839,7 +924,8 @@ public class MainActivity extends Activity {
                           + "Tap the active brush, smudge or eraser: brush library\n"
                           + "Drag the colour circle onto the canvas: fill (ColorDrop)\n"
                           + "Tap the selected layer: layer options\n"
-                          + "In an adjustment: slide on the canvas to change the amount")
+                          + "In an adjustment: slide on the canvas to change the amount\n"
+                          + "Layers: tap the mask thumbnail to paint the mask")
                             .setPositiveButton("OK", null).show();
                     break;
             }
@@ -978,26 +1064,49 @@ public class MainActivity extends Activity {
         refreshPanel();
     }
 
+    private Bitmap thumbOf(CanvasView.Layer l, int tw, int th) {
+        if (l.dirty || l.thumb == null || l.thumb.getWidth() != tw) {
+            l.thumb = Bitmap.createScaledBitmap(l.bmp, tw, th, true);
+            l.dirty = false;
+        }
+        return l.thumb;
+    }
+
     private void refreshPanel() {
+        if (canvas.anim) refreshTimeline();
         if (panel == null || panel.getVisibility() != View.VISIBLE) return;
         layerList.removeAllViews();
         opacityBar.setProgress(canvas.cur().opacity);
-        int tw = (int) (48 * dp), th = Math.max(1, tw * canvas.docH / canvas.docW);
+        int tw = (int) (44 * dp), th = Math.max(1, tw * canvas.docH / canvas.docW);
+        int lastGroup = 0;
         for (int i = canvas.layers.size() - 1; i >= 0; i--) { // top layer first
             CanvasView.Layer l = canvas.layers.get(i);
-            if (l.dirty || l.thumb == null) {
-                l.thumb = Bitmap.createScaledBitmap(l.bmp, tw, th, true);
-                l.dirty = false;
-            }
             final int idx = i;
+            if (l.group != 0 && l.group != lastGroup) groupHeader(l.group);
+            lastGroup = l.group;
+            CanvasView.Group gr = canvas.groups.get(l.group);
+            if (l.group != 0 && gr != null && gr.collapsed) continue;
             LinearLayout r = new LinearLayout(this);
             r.setGravity(Gravity.CENTER_VERTICAL);
-            r.setPadding(0, (int) (3 * dp), 0, (int) (3 * dp));
-            r.setBackgroundColor(i == canvas.current ? 0xFF555555 : 0);
+            r.setPadding(l.group != 0 ? (int) (18 * dp) : 0, (int) (3 * dp), 0, (int) (3 * dp));
+            r.setBackgroundColor(i == canvas.current ? 0xFF48484A : 0);
             ImageView iv = new ImageView(this);
-            iv.setImageBitmap(l.thumb);
-            iv.setBackgroundColor(0xFF888888);
-            r.addView(iv, new LinearLayout.LayoutParams(tw, th));
+            iv.setImageBitmap(thumbOf(l, tw, th));
+            iv.setBackgroundColor(i == canvas.current && !l.editMask ? Ui.ACCENT : 0xFF888888);
+            iv.setPadding(2, 2, 2, 2);
+            iv.setOnClickListener(v -> { canvas.select(idx); canvas.editMask(false); });
+            r.addView(iv, new LinearLayout.LayoutParams(tw, th + 4));
+            if (l.mask != null) {
+                ImageView mv = new ImageView(this);
+                mv.setImageBitmap(thumbOf(l.mask, tw, th));
+                mv.setBackgroundColor(i == canvas.current && l.editMask ? Ui.ACCENT : 0xFF555555);
+                mv.setPadding(2, 2, 2, 2);
+                mv.setAlpha(l.maskOn ? 1f : 0.4f);
+                mv.setOnClickListener(v -> { canvas.select(idx); canvas.editMask(true); });
+                LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(tw, th + 4);
+                mlp.leftMargin = (int) (4 * dp);
+                r.addView(mv, mlp);
+            }
             TextView name = new TextView(this);
             name.setText((l.clip ? "↳ " : "") + l.name + (l.alphaLock ? "  α" : ""));
             name.setTextColor(Color.WHITE);
@@ -1011,7 +1120,8 @@ public class MainActivity extends Activity {
             bl.setOnClickListener(v -> blendMenu(v, idx));
             r.addView(bl);
             TextView vis = new TextView(this);
-            vis.setText(l.visible ? "Shown" : "Hidden");
+            vis.setText(l.visible ? "●" : "○");
+            vis.setTextSize(16);
             vis.setTextColor(l.visible ? Color.WHITE : 0xFF888888);
             vis.setPadding((int) (8 * dp), (int) (8 * dp), (int) (8 * dp), (int) (8 * dp));
             vis.setOnClickListener(v -> canvas.toggleVisible(idx));
@@ -1019,6 +1129,359 @@ public class MainActivity extends Activity {
             r.setOnClickListener(v -> { if (idx == canvas.current) layerOptions(v, idx); else canvas.select(idx); });
             layerList.addView(r);
         }
+    }
+
+    private void groupHeader(int g) {
+        CanvasView.Group gr = canvas.groups.get(g);
+        if (gr == null) { gr = new CanvasView.Group("Group"); canvas.groups.put(g, gr); }
+        CanvasView.Group G = gr;
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setBackgroundColor(0xFF3A3A3C);
+        TextView arrow = new TextView(this);
+        arrow.setText(gr.collapsed ? "▸" : "▾");
+        arrow.setTextColor(Color.WHITE);
+        arrow.setTextSize(16);
+        arrow.setPadding((int) (8 * dp), (int) (8 * dp), (int) (8 * dp), (int) (8 * dp));
+        arrow.setOnClickListener(v -> { G.collapsed = !G.collapsed; refreshPanel(); });
+        r.addView(arrow);
+        TextView n = new TextView(this);
+        n.setText(gr.name + (gr.opacity < 255 ? "  " + gr.opacity * 100 / 255 + "%" : ""));
+        n.setTextColor(Color.WHITE);
+        n.setOnClickListener(v -> groupMenu(v, g));
+        r.addView(n, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView vis = new TextView(this);
+        vis.setText(gr.visible ? "●" : "○");
+        vis.setTextSize(16);
+        vis.setTextColor(Color.WHITE);
+        vis.setPadding((int) (8 * dp), (int) (8 * dp), (int) (8 * dp), (int) (8 * dp));
+        vis.setOnClickListener(v -> { G.visible = !G.visible; canvas.invalidate(); refreshPanel(); });
+        r.addView(vis);
+        layerList.addView(r);
+    }
+
+    private void groupMenu(View anchor, int g) {
+        CanvasView.Group gr = canvas.groups.get(g);
+        PopupMenu m = new PopupMenu(this, anchor);
+        m.getMenu().add(0, 1, 0, "Rename group");
+        m.getMenu().add(0, 2, 1, "Group opacity…");
+        m.getMenu().add(0, 3, 2, "Flatten group");
+        m.setOnMenuItemClickListener(it -> {
+            switch (it.getItemId()) {
+                case 1: {
+                    android.widget.EditText et = new android.widget.EditText(this);
+                    et.setText(gr.name);
+                    new AlertDialog.Builder(this).setTitle("Rename group").setView(et)
+                            .setPositiveButton("OK", (d, w) -> { gr.name = et.getText().toString(); refreshPanel(); }).show();
+                    break;
+                }
+                case 2: {
+                    SeekBar sb = new SeekBar(this);
+                    sb.setMax(255);
+                    sb.setProgress(gr.opacity);
+                    sb.setOnSeekBarChangeListener(new Slider() {
+                        public void onProgressChanged(SeekBar s, int p, boolean u) { gr.opacity = p; canvas.invalidate(); }
+                    });
+                    new AlertDialog.Builder(this).setTitle("Group opacity").setView(sb)
+                            .setPositiveButton("OK", (d, w) -> refreshPanel()).show();
+                    break;
+                }
+                case 3: canvas.flattenGroup(g); break;
+            }
+            return true;
+        });
+        m.show();
+    }
+
+    // ---------- Reference window ----------
+
+    private LinearLayout refView;
+    private View refContent;
+    private int refMode;            // 0 canvas, 1 image
+    private Bitmap refImage;
+
+    private void toggleReference() {
+        if (refView == null) {
+            refView = new LinearLayout(this);
+            refView.setOrientation(LinearLayout.VERTICAL);
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setColor(Ui.PANEL);
+            bg.setCornerRadius(10 * dp);
+            refView.setBackground(bg);
+            refView.setPadding((int) (4 * dp), 0, (int) (4 * dp), (int) (4 * dp));
+            LinearLayout head = new LinearLayout(this);
+            head.setGravity(Gravity.CENTER_VERTICAL);
+            TextView t = new TextView(this);
+            t.setText("  Reference");
+            t.setTextColor(Color.WHITE);
+            head.addView(t, new LinearLayout.LayoutParams(0, -1, 1f));
+            TextView cv = chip(head, "Canvas", refMode == 0, null), im = chip(head, "Image", refMode == 1, null);
+            cv.setOnClickListener(v -> { refMode = 0; toggleReference(); toggleReference(); });
+            im.setOnClickListener(v -> {
+                if (refImage == null) { openDoc(REQ_REF); return; }
+                refMode = 1; toggleReference(); toggleReference();
+            });
+            TextView rs = chip(head, "⤡", false, null);
+            TextView x = chip(head, "✕", false, v -> refView.setVisibility(View.GONE));
+            head.setOnTouchListener(dragMove(refView));
+            rs.setOnTouchListener(dragResize(refView));
+            refView.addView(head, new LinearLayout.LayoutParams(-1, (int) (40 * dp)));
+            refContent = new View(this) {
+                @Override
+                protected void onDraw(Canvas c) {
+                    float w = getWidth(), h = getHeight();
+                    if (refMode == 1 && refImage != null) {
+                        float s = Math.min(w / refImage.getWidth(), h / refImage.getHeight());
+                        c.translate((w - refImage.getWidth() * s) / 2, (h - refImage.getHeight() * s) / 2);
+                        c.scale(s, s);
+                        c.drawBitmap(refImage, 0, 0, new Paint(Paint.FILTER_BITMAP_FLAG));
+                    } else if (canvas.docW > 0) {
+                        float s = Math.min(w / canvas.docW, h / canvas.docH);
+                        c.translate((w - canvas.docW * s) / 2, (h - canvas.docH * s) / 2);
+                        c.scale(s, s);
+                        c.clipRect(0, 0, canvas.docW, canvas.docH);
+                        canvas.drawInto(c);
+                    }
+                }
+            };
+            refContent.setOnTouchListener((v, e) -> { // tap the reference image to pick its grey
+                if (refMode != 1 || refImage == null || e.getActionMasked() != android.view.MotionEvent.ACTION_UP) return true;
+                float s = Math.min((float) v.getWidth() / refImage.getWidth(), (float) v.getHeight() / refImage.getHeight());
+                int px = (int) ((e.getX() - (v.getWidth() - refImage.getWidth() * s) / 2) / s);
+                int py = (int) ((e.getY() - (v.getHeight() - refImage.getHeight() * s) / 2) / s);
+                if (px >= 0 && py >= 0 && px < refImage.getWidth() && py < refImage.getHeight()) {
+                    canvas.grey = Video.grey(refImage.getPixel(px, py));
+                    updateColor();
+                }
+                return true;
+            });
+            refView.addView(refContent, new LinearLayout.LayoutParams(-1, 0, 1f));
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int) (220 * dp), (int) (260 * dp), Gravity.TOP | Gravity.START);
+            lp.setMargins((int) (60 * dp), (int) (60 * dp), 0, 0);
+            stage.addView(refView, lp);
+            return;
+        }
+        if (refView.getVisibility() == View.VISIBLE) { refView.setVisibility(View.GONE); return; }
+        refView.setVisibility(View.VISIBLE);
+        refContent.invalidate();
+    }
+
+    private View.OnTouchListener dragMove(View target) {
+        float[] st = new float[4];
+        return (v, e) -> {
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) target.getLayoutParams();
+            if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) { st[0] = e.getRawX(); st[1] = e.getRawY(); st[2] = lp.leftMargin; st[3] = lp.topMargin; }
+            else if (e.getActionMasked() == android.view.MotionEvent.ACTION_MOVE) {
+                lp.leftMargin = Math.max(0, (int) (st[2] + e.getRawX() - st[0]));
+                lp.topMargin = Math.max(0, (int) (st[3] + e.getRawY() - st[1]));
+                target.setLayoutParams(lp);
+            }
+            return true;
+        };
+    }
+
+    private View.OnTouchListener dragResize(View target) {
+        float[] st = new float[4];
+        return (v, e) -> {
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) target.getLayoutParams();
+            if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) { st[0] = e.getRawX(); st[1] = e.getRawY(); st[2] = target.getWidth(); st[3] = target.getHeight(); }
+            else if (e.getActionMasked() == android.view.MotionEvent.ACTION_MOVE) {
+                lp.width = Math.max((int) (160 * dp), (int) (st[2] + e.getRawX() - st[0]));
+                lp.height = Math.max((int) (140 * dp), (int) (st[3] + e.getRawY() - st[1]));
+                target.setLayoutParams(lp);
+            }
+            return true;
+        };
+    }
+
+    private void loadReferenceImage(Uri uri) {
+        new Thread(() -> {
+            try {
+                Psd.Doc d = decode(uri);
+                Bitmap b = Bitmap.createBitmap(d.w, d.h, Bitmap.Config.ARGB_8888);
+                Canvas c = new Canvas(b);
+                c.drawColor(Color.WHITE);
+                for (CanvasView.Layer l : d.layers) if (l.visible) c.drawBitmap(l.bmp, 0, 0, null);
+                runOnUiThread(() -> {
+                    refImage = b;
+                    refMode = 1;
+                    if (refView != null) { refView.setVisibility(View.GONE); toggleReference(); }
+                });
+            } catch (Throwable t) { runOnUiThread(() -> toast("Could not open: " + t.getMessage())); }
+        }).start();
+    }
+
+    // ---------- Animation Assist ----------
+
+    private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable playTick = new Runnable() {
+        public void run() {
+            if (!canvas.playing) return;
+            int f0 = canvas.firstFrame(), n = canvas.layers.size() - f0;
+            if (n <= 0) return;
+            canvas.playFrame = f0 + ((canvas.playFrame - f0 + 1) % n);
+            canvas.invalidate();
+            handler.postDelayed(this, 1000 / Math.max(1, canvas.fps));
+        }
+    };
+
+    private boolean playing() { return canvas.playing; }
+
+    private void togglePlay() {
+        canvas.playing = !canvas.playing;
+        if (canvas.playing) { canvas.playFrame = canvas.current; handler.post(playTick); }
+        canvas.invalidate();
+        refreshTimeline();
+    }
+
+    private void toggleAnimation() {
+        canvas.anim = !canvas.anim;
+        if (!canvas.anim && canvas.playing) togglePlay();
+        timeline.setVisibility(canvas.anim ? View.VISIBLE : View.GONE);
+        if (canvas.anim) { refreshTimeline(); toast("Animation Assist: each layer is a frame"); }
+        canvas.invalidate();
+    }
+
+    private void refreshTimeline() {
+        if (timeline == null || !canvas.anim) return;
+        timeline.removeAllViews();
+        LinearLayout ctl = barRow();
+        chip(ctl, canvas.playing ? "■ Stop" : "▶ Play", canvas.playing, v -> togglePlay());
+        chip(ctl, "＋ Frame", false, v -> { if (!canvas.addLayer(canvas.newLayer("Frame " + (canvas.layers.size() + 1)))) full(); });
+        chip(ctl, "Settings", false, v -> animSettings());
+        chip(ctl, "Export", false, v -> {
+            PopupMenu m = new PopupMenu(this, v);
+            m.getMenu().add(0, REQ_GIF, 0, "Animated GIF");
+            m.getMenu().add(0, REQ_AMP4, 1, "MP4 video");
+            m.setOnMenuItemClickListener(it -> {
+                boolean gif = it.getItemId() == REQ_GIF;
+                startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                        .setType(gif ? "image/gif" : "video/mp4")
+                        .putExtra(Intent.EXTRA_TITLE, nameOf(curId) + (gif ? ".gif" : ".mp4")), it.getItemId());
+                return true;
+            });
+            m.show();
+        });
+        TextView info = new TextView(this);
+        info.setText("  " + canvas.fps + " fps · onion " + canvas.onion);
+        info.setTextColor(0xFF8E8E93);
+        ctl.addView(info);
+        HorizontalScrollView h1 = new HorizontalScrollView(this);
+        h1.addView(ctl);
+        timeline.addView(h1);
+        LinearLayout frames = barRow();
+        int tw = (int) (44 * dp), th = Math.max(1, tw * canvas.docH / Math.max(1, canvas.docW)); // same size as the layers panel
+        int showH = Math.min(th, (int) (64 * dp));
+        int f0 = canvas.firstFrame();
+        for (int i = f0; i < canvas.layers.size(); i++) {
+            int idx = i;
+            LinearLayout cell = new LinearLayout(this);
+            cell.setOrientation(LinearLayout.VERTICAL);
+            cell.setGravity(Gravity.CENTER_HORIZONTAL);
+            cell.setPadding((int) (3 * dp), (int) (3 * dp), (int) (3 * dp), (int) (3 * dp));
+            cell.setBackgroundColor(idx == canvas.current ? Ui.ACCENT : 0);
+            ImageView iv = new ImageView(this);
+            iv.setBackgroundColor(Color.WHITE);
+            iv.setImageBitmap(thumbOf(canvas.layers.get(i), tw, th));
+            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            cell.addView(iv, new LinearLayout.LayoutParams(tw, showH));
+            TextView n = new TextView(this);
+            n.setText(String.valueOf(i - f0 + 1));
+            n.setTextColor(Color.WHITE);
+            n.setTextSize(11);
+            cell.addView(n);
+            cell.setOnClickListener(v -> canvas.select(idx));
+            frames.addView(cell);
+        }
+        HorizontalScrollView h2 = new HorizontalScrollView(this);
+        h2.addView(frames);
+        timeline.addView(h2);
+    }
+
+    private void animSettings() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int p = (int) (16 * dp);
+        box.setPadding(p, p, p, 0);
+        TextView fl = new TextView(this);
+        box.addView(fl);
+        SeekBar fps = new SeekBar(this);
+        fps.setMax(29);
+        fps.setProgress(canvas.fps - 1);
+        box.addView(fps);
+        TextView ol = new TextView(this);
+        box.addView(ol);
+        SeekBar on = new SeekBar(this);
+        on.setMax(5);
+        on.setProgress(canvas.onion);
+        box.addView(on);
+        TextView oo = new TextView(this);
+        box.addView(oo);
+        SeekBar op = new SeekBar(this);
+        op.setMax(100);
+        op.setProgress(Math.round(canvas.onionOpacity * 100));
+        box.addView(op);
+        android.widget.CheckBox bgc = new android.widget.CheckBox(this);
+        bgc.setText("First layer is a background (shown on every frame)");
+        bgc.setChecked(canvas.animBackground);
+        box.addView(bgc);
+        Runnable upd = () -> {
+            fl.setText("Frames per second: " + (fps.getProgress() + 1));
+            ol.setText("Onion skin frames: " + on.getProgress());
+            oo.setText("Onion skin opacity: " + op.getProgress() + "%");
+        };
+        Slider sl = new Slider() { public void onProgressChanged(SeekBar s, int v, boolean u) { upd.run(); } };
+        fps.setOnSeekBarChangeListener(sl); on.setOnSeekBarChangeListener(sl); op.setOnSeekBarChangeListener(sl);
+        upd.run();
+        new AlertDialog.Builder(this).setTitle("Animation settings").setView(box)
+                .setPositiveButton("OK", (d, w) -> {
+                    canvas.fps = fps.getProgress() + 1;
+                    canvas.onion = on.getProgress();
+                    canvas.onionOpacity = op.getProgress() / 100f;
+                    canvas.animBackground = bgc.isChecked();
+                    canvas.invalidate();
+                    refreshTimeline();
+                }).show();
+    }
+
+    private void exportAnimation(Uri uri, boolean gif) {
+        int f0 = canvas.firstFrame(), n = canvas.layers.size() - f0;
+        if (n <= 0) return;
+        int w, h;
+        if (gif) {
+            float s = Math.min(1f, 800f / Math.max(canvas.docW, canvas.docH));
+            w = Math.max(1, Math.round(canvas.docW * s)); h = Math.max(1, Math.round(canvas.docH * s));
+        } else { int[] vs = Video.videoSize(canvas.docW, canvas.docH); w = vs[0]; h = vs[1]; }
+        int fps = canvas.fps;
+        // render frames now (UI thread owns the layers), encode in the background
+        Bitmap[] fr = new Bitmap[n];
+        for (int i = 0; i < n; i++) fr[i] = canvas.renderFrame(f0 + i, w, h);
+        toast("Exporting animation…");
+        new Thread(() -> {
+            String msg = "Animation saved";
+            Video.Frames frames = new Video.Frames() {
+                public int count() { return gif ? n : Math.max(n, n * Math.max(1, 2 * fps / n)); } // MP4: loop to ~2 s minimum
+                public Bitmap get(int i) { return fr[i % n].copy(Bitmap.Config.ARGB_8888, false); }
+            };
+            try {
+                if (gif) try (OutputStream o = getContentResolver().openOutputStream(uri, "wt")) { Video.gif(o, w, h, fps, frames); }
+                else try (ParcelFileDescriptor fd = getContentResolver().openFileDescriptor(uri, "rw")) { Video.mp4(fd.getFileDescriptor(), w, h, fps, frames); }
+            } catch (Throwable t) { msg = "Export failed: " + t.getMessage(); }
+            for (Bitmap b : fr) b.recycle();
+            String fm = msg;
+            runOnUiThread(() -> toast(fm));
+        }).start();
+    }
+
+    private String displayName(Uri uri) {
+        try (android.database.Cursor c = getContentResolver().query(uri, new String[]{android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                String n = c.getString(0);
+                int dot = n.lastIndexOf('.');
+                return dot > 0 ? n.substring(0, dot) : n;
+            }
+        } catch (Exception ignored) { }
+        return null;
     }
 
     // ---------- Open / import ----------
@@ -1112,7 +1575,16 @@ public class MainActivity extends Activity {
                         for (CanvasView.Layer l : d.layers)
                             if (!canvas.importLayer(l.bmp, l.name)) { full(); break; }
                     } else {
+                        saveCurrent(null);
+                        curId = newId();
+                        prefs.edit().putString("cur", curId).apply();
+                        String fname = displayName(uri);
+                        if (fname != null) setName(curId, fname);
                         canvas.setDocument(d.w, d.h, d.layers);
+                        canvas.setGroups(d.groups);
+                        savedSel.clear();
+                        saveCurrent(this::fillGallery);
+                        if (gallery != null) gallery.setVisibility(View.GONE);
                     }
                     toast(d.layers.size() + " layer(s) loaded");
                 });
@@ -1190,6 +1662,7 @@ public class MainActivity extends Activity {
     private void export(Uri uri, int fmt) {
         Bitmap flat = canvas.flatten();
         java.util.List<CanvasView.Layer> layers = new java.util.ArrayList<>(canvas.layers);
+        java.util.Map<Integer, CanvasView.Group> groups = new java.util.HashMap<>(canvas.groups);
         int w = canvas.docW, h = canvas.docH;
         toast("Saving…");
         new Thread(() -> {
@@ -1208,7 +1681,7 @@ public class MainActivity extends Activity {
                         pdf.close();
                         break;
                     }
-                    default: Psd.write(o, w, h, layers, flat);
+                    default: Psd.write(o, w, h, layers, groups, flat);
                 }
             } catch (Throwable t) { msg = "Save failed: " + t.getMessage(); }
             flat.recycle();
@@ -1225,27 +1698,391 @@ public class MainActivity extends Activity {
         else if (req == REQ_OPEN) load(data.getData(), false);
         else if (req == REQ_IMPORT) load(data.getData(), true);
         else if (req == REQ_BRUSH) importBrushes(data.getData());
+        else if (req == REQ_GALLERY) load(data.getData(), false);
+        else if (req == REQ_TL) exportTimelapse(data.getData());
+        else if (req == REQ_GIF || req == REQ_AMP4) exportAnimation(data.getData(), req == REQ_GIF);
+        else if (req == REQ_REF) loadReferenceImage(data.getData());
     }
 
-    // ---------- Autosave ----------
+    // ---------- Autosave + Gallery ----------
 
     @Override
     protected void onPause() {
         super.onPause();
-        if (!loaded) return;
+        if (loaded) saveCurrent(null);
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (gallery != null && gallery.getVisibility() == View.VISIBLE) {
+            if (docFile(curId).exists()) gallery.setVisibility(View.GONE); else super.onBackPressed();
+        } else showGallery();
+    }
+
+    private File docFile(String id) { return new File(gdir, id + ".psd"); }
+    private File thumbFile(String id) { return new File(gdir, id + ".png"); }
+    private File nameFile(String id) { return new File(gdir, id + ".name"); }
+    private File selFile(String id) { return new File(gdir, id + ".sel"); }
+    private File tlDir(String id) { return new File(gdir, id + "_tl"); }
+    private String newId() { return Long.toString(System.currentTimeMillis(), 36); }
+
+    private String nameOf(String id) {
+        try { return new String(java.nio.file.Files.readAllBytes(nameFile(id).toPath()), "UTF-8"); }
+        catch (Exception e) { return "Untitled"; }
+    }
+
+    private void setName(String id, String n) {
+        try (FileOutputStream o = new FileOutputStream(nameFile(id))) { o.write(n.getBytes("UTF-8")); } catch (Exception ignored) { }
+    }
+
+    /** Saves the open drawing (layers as PSD + thumbnail) on a background thread, then runs done on the UI thread. */
+    private void saveCurrent(Runnable done) {
+        if (adjActiveFinish()) { /* applied */ }
         canvas.commitMove();
         Bitmap flat = canvas.flatten();
+        Bitmap thumb = canvas.renderSmall(420);
         java.util.List<CanvasView.Layer> layers = new java.util.ArrayList<>(canvas.layers);
+        java.util.Map<Integer, CanvasView.Group> groups = new java.util.HashMap<>(canvas.groups);
         int w = canvas.docW, h = canvas.docH;
+        String id = curId;
         new Thread(() -> {
             synchronized (MainActivity.class) {
-                File tmp = new File(autosave.getPath() + ".tmp");
+                File doc = docFile(id), tmp = new File(doc.getPath() + ".tmp");
                 try (OutputStream o = new FileOutputStream(tmp)) {
-                    Psd.write(o, w, h, layers, flat);
-                } catch (Throwable t) { flat.recycle(); return; }
-                tmp.renameTo(autosave);
+                    Psd.write(o, w, h, layers, groups, flat);
+                    tmp.renameTo(doc);
+                } catch (Throwable ignored) { }
+                try (OutputStream o = new FileOutputStream(thumbFile(id))) { thumb.compress(Bitmap.CompressFormat.PNG, 100, o); }
+                catch (Throwable ignored) { }
             }
             flat.recycle();
+            thumb.recycle();
+            if (done != null) runOnUiThread(done);
         }).start();
+    }
+
+    private boolean adjActiveFinish() {
+        if (canvas.adjusting()) { finishAdjust(true); return true; }
+        if (canvas.liquifying()) { canvas.endLiquify(true); return true; }
+        return false;
+    }
+
+    private FrameLayout gallery;
+    private LinearLayout galleryGrid;
+
+    private void showGallery() {
+        if (gallery == null) {
+            gallery = new FrameLayout(this);
+            gallery.setBackgroundColor(0xFF111113);
+            gallery.setClickable(true);
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout head = new LinearLayout(this);
+            head.setGravity(Gravity.CENTER_VERTICAL);
+            head.setPadding((int) (12 * dp), 0, (int) (8 * dp), 0);
+            TextView t = new TextView(this);
+            t.setText("Gallery");
+            t.setTextColor(Color.WHITE);
+            t.setTextSize(22);
+            head.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+            button(head, "Import", v -> openDoc(REQ_GALLERY));
+            button(head, "＋ New", this::newMenu);
+            col.addView(head, new LinearLayout.LayoutParams(-1, (int) (52 * dp)));
+            ScrollView sv = new ScrollView(this);
+            galleryGrid = new LinearLayout(this);
+            galleryGrid.setOrientation(LinearLayout.VERTICAL);
+            galleryGrid.setPadding((int) (8 * dp), 0, (int) (8 * dp), (int) (8 * dp));
+            sv.addView(galleryGrid);
+            col.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
+            gallery.addView(col);
+            shell.addView(gallery);
+        }
+        gallery.setVisibility(View.VISIBLE);
+        if (playing()) togglePlay();
+        saveCurrent(this::fillGallery);
+        fillGallery();
+    }
+
+    private void fillGallery() {
+        if (galleryGrid == null) return;
+        galleryGrid.removeAllViews();
+        File[] docs = gdir.listFiles((d, n) -> n.endsWith(".psd"));
+        if (docs == null) docs = new File[0];
+        java.util.Arrays.sort(docs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        int cols = Math.max(2, (int) (getResources().getDisplayMetrics().widthPixels / dp / 190));
+        int cw = (int) ((getResources().getDisplayMetrics().widthPixels - 16 * dp) / cols);
+        LinearLayout row = null;
+        for (int i = 0; i < docs.length; i++) {
+            if (i % cols == 0) { row = new LinearLayout(this); galleryGrid.addView(row); }
+            String id = docs[i].getName().replace(".psd", "");
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding((int) (6 * dp), (int) (8 * dp), (int) (6 * dp), (int) (4 * dp));
+            ImageView iv = new ImageView(this);
+            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            iv.setBackgroundColor(id.equals(curId) ? Ui.ACCENT : 0xFF2C2C2E);
+            iv.setPadding(3, 3, 3, 3);
+            Bitmap tb = android.graphics.BitmapFactory.decodeFile(thumbFile(id).getPath());
+            if (tb != null) iv.setImageBitmap(tb);
+            card.addView(iv, new LinearLayout.LayoutParams(-1, (int) (cw * 1.1f)));
+            TextView nm = new TextView(this);
+            nm.setText(nameOf(id));
+            nm.setTextColor(Color.WHITE);
+            nm.setSingleLine(true);
+            nm.setPadding(0, (int) (4 * dp), 0, 0);
+            card.addView(nm);
+            TextView sz = new TextView(this);
+            sz.setText(tb == null ? "" : new java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.getDefault()).format(new java.util.Date(docs[i].lastModified())));
+            sz.setTextColor(0xFF8E8E93);
+            sz.setTextSize(12);
+            card.addView(sz);
+            card.setOnClickListener(v -> openGalleryItem(id));
+            card.setOnLongClickListener(v -> { galleryItemMenu(v, id); return true; });
+            row.addView(card, new LinearLayout.LayoutParams(cw, -2));
+        }
+        if (docs.length == 0) {
+            TextView e = new TextView(this);
+            e.setText("No drawings yet. Tap ＋ New.");
+            e.setTextColor(0xFF8E8E93);
+            e.setPadding((int) (8 * dp), (int) (24 * dp), 0, 0);
+            galleryGrid.addView(e);
+        }
+    }
+
+    private void openGalleryItem(String id) {
+        if (id.equals(curId)) { gallery.setVisibility(View.GONE); return; }
+        toast("Opening…");
+        new Thread(() -> {
+            Psd.Doc d = null;
+            synchronized (MainActivity.class) {
+                try (InputStream in = new FileInputStream(docFile(id))) { d = Psd.read(in, MAX_PIXELS); }
+                catch (Throwable ignored) { }
+            }
+            Psd.Doc fd = d;
+            runOnUiThread(() -> {
+                if (fd == null) { toast("Could not open this drawing"); return; }
+                curId = id;
+                prefs.edit().putString("cur", id).apply();
+                canvas.setDocument(fd.w, fd.h, fd.layers);
+                canvas.setGroups(fd.groups);
+                loadSelections();
+                gallery.setVisibility(View.GONE);
+                if (canvas.anim) refreshTimeline();
+            });
+        }).start();
+    }
+
+    /** Starts a new gallery drawing of the given size. */
+    private void newGalleryItem(int w, int h) {
+        curId = newId();
+        prefs.edit().putString("cur", curId).apply();
+        newDocument(w, h);
+        savedSel.clear();
+        saveCurrent(null);
+        if (gallery != null) gallery.setVisibility(View.GONE);
+    }
+
+    private void newMenu(View anchor) {
+        Rect scr = getWindowManager().getMaximumWindowMetrics().getBounds();
+        int sw = Math.min(scr.width(), scr.height()), sh = Math.max(scr.width(), scr.height());
+        int[][] sizes = {{sw, sh}, {sh, sw}, {2048, 2048}, {2048, 2732}, {2480, 3508}, {2550, 3300}, {1988, 3075}, {1920, 1080}, {3840, 2160}, {1080, 1350}};
+        String[] names = {"Screen size", "Screen size (landscape)", "Square", "iPad Procreate default", "A4 @ 300 dpi", "US Letter @ 300 dpi",
+                "Comic page @ 300 dpi", "HD 1920×1080", "4K", "Instagram portrait"};
+        PopupMenu m = new PopupMenu(this, anchor);
+        for (int i = 0; i < names.length; i++) m.getMenu().add(0, i, i, names[i] + "   " + sizes[i][0] + "×" + sizes[i][1]);
+        m.getMenu().add(0, 99, 99, "Custom size…");
+        m.setOnMenuItemClickListener(it -> {
+            int id = it.getItemId();
+            saveCurrent(null);
+            if (id == 99) { newGalleryItem(sw, sh); canvasDialog(); }
+            else newGalleryItem(sizes[id][0], sizes[id][1]);
+            return true;
+        });
+        m.show();
+    }
+
+    private void galleryItemMenu(View anchor, String id) {
+        PopupMenu m = new PopupMenu(this, anchor);
+        m.getMenu().add(0, 1, 0, "Rename");
+        m.getMenu().add(0, 2, 1, "Duplicate");
+        m.getMenu().add(0, 3, 2, "Delete");
+        m.setOnMenuItemClickListener(it -> {
+            switch (it.getItemId()) {
+                case 1: {
+                    android.widget.EditText et = new android.widget.EditText(this);
+                    et.setText(nameOf(id));
+                    et.setSelectAllOnFocus(true);
+                    new AlertDialog.Builder(this).setTitle("Rename").setView(et)
+                            .setPositiveButton("OK", (d, w) -> { setName(id, et.getText().toString()); fillGallery(); }).show();
+                    break;
+                }
+                case 2: {
+                    String nid = newId();
+                    try {
+                        java.nio.file.Files.copy(docFile(id).toPath(), docFile(nid).toPath());
+                        if (thumbFile(id).exists()) java.nio.file.Files.copy(thumbFile(id).toPath(), thumbFile(nid).toPath());
+                        setName(nid, nameOf(id) + " copy");
+                    } catch (Exception e) { toast("Could not duplicate"); }
+                    fillGallery();
+                    break;
+                }
+                case 3:
+                    confirm("Delete \"" + nameOf(id) + "\"? This can't be undone.", () -> {
+                        for (File f : new File[]{docFile(id), thumbFile(id), nameFile(id), selFile(id)}) f.delete();
+                        File[] tl = tlDir(id).listFiles();
+                        if (tl != null) for (File f : tl) f.delete();
+                        tlDir(id).delete();
+                        if (id.equals(curId)) { // keep a valid open drawing
+                            Rect scr = getWindowManager().getMaximumWindowMetrics().getBounds();
+                            curId = newId();
+                            prefs.edit().putString("cur", curId).apply();
+                            newDocument(Math.min(scr.width(), scr.height()), Math.max(scr.width(), scr.height()));
+                            savedSel.clear();
+                        }
+                        fillGallery();
+                    });
+                    break;
+            }
+            return true;
+        });
+        m.show();
+    }
+
+    // ---------- Time-lapse ----------
+
+    private void captureTimelapse() {
+        if (!tlOn || tlBusy || !loaded || curId == null) return;
+        tlBusy = true;
+        Bitmap b = canvas.renderSmall(1280);
+        File dir = tlDir(curId);
+        new Thread(() -> {
+            dir.mkdirs();
+            String[] n = dir.list();
+            File f = new File(dir, String.format(java.util.Locale.US, "%07d.jpg", n == null ? 0 : n.length));
+            try (OutputStream o = new FileOutputStream(f)) { b.compress(Bitmap.CompressFormat.JPEG, 80, o); }
+            catch (Throwable ignored) { }
+            b.recycle();
+            tlBusy = false;
+        }).start();
+    }
+
+    private File[] tlFrames() {
+        File[] fs = tlDir(curId).listFiles((d, n) -> n.endsWith(".jpg"));
+        if (fs == null) return new File[0];
+        java.util.Arrays.sort(fs);
+        return fs;
+    }
+
+    private void timelapseMenu(View anchor) {
+        PopupMenu m = new PopupMenu(this, anchor);
+        m.getMenu().add(0, 1, 0, "Time-lapse replay");
+        m.getMenu().add(0, 2, 1, "Export time-lapse: full length (MP4)");
+        m.getMenu().add(0, 3, 2, "Export time-lapse: 30 seconds (MP4)");
+        m.getMenu().add(0, 4, 3, (tlOn ? "✓ " : "") + "Record time-lapse");
+        m.getMenu().add(0, 5, 4, "Delete this drawing's time-lapse");
+        m.setOnMenuItemClickListener(it -> {
+            switch (it.getItemId()) {
+                case 1: replayTimelapse(); break;
+                case 2: case 3:
+                    tlShort = it.getItemId() == 3;
+                    if (tlFrames().length == 0) { toast("Nothing recorded yet"); break; }
+                    startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                            .setType("video/mp4").putExtra(Intent.EXTRA_TITLE, nameOf(curId) + " time-lapse.mp4"), REQ_TL);
+                    break;
+                case 4: tlOn = !tlOn; prefs.edit().putBoolean("timelapse", tlOn).apply(); toast(tlOn ? "Recording time-lapse" : "Time-lapse off"); break;
+                case 5: confirm("Delete the recorded time-lapse?", () -> { for (File f : tlFrames()) f.delete(); }); break;
+            }
+            return true;
+        });
+        m.show();
+    }
+
+    private boolean tlShort;
+
+    private void exportTimelapse(Uri uri) {
+        File[] all = tlFrames();
+        int n = tlShort ? Math.min(all.length, 900) : all.length;
+        File[] pick = new File[n];
+        for (int i = 0; i < n; i++) pick[i] = all[(int) ((long) i * all.length / n)];
+        android.graphics.BitmapFactory.Options op = new android.graphics.BitmapFactory.Options();
+        op.inJustDecodeBounds = true;
+        android.graphics.BitmapFactory.decodeFile(all[all.length - 1].getPath(), op);
+        int[] vs = Video.videoSize(op.outWidth, op.outHeight);
+        Bitmap last = canvas.renderSmall(1280);
+        toast("Making video…");
+        new Thread(() -> {
+            String msg = "Time-lapse saved";
+            try (ParcelFileDescriptor fd = getContentResolver().openFileDescriptor(uri, "rw")) {
+                Video.mp4(fd.getFileDescriptor(), vs[0], vs[1], 30, new Video.Frames() {
+                    public int count() { return n + 60; } // hold the finished picture for 2 s
+                    public Bitmap get(int i) {
+                        if (i >= n) return last.copy(Bitmap.Config.ARGB_8888, false);
+                        return android.graphics.BitmapFactory.decodeFile(pick[i].getPath());
+                    }
+                });
+            } catch (Throwable t) { msg = "Video failed: " + t.getMessage(); }
+            last.recycle();
+            String fm = msg;
+            runOnUiThread(() -> toast(fm));
+        }).start();
+    }
+
+    private void replayTimelapse() {
+        File[] fs = tlFrames();
+        if (fs.length == 0) { toast("Nothing recorded yet"); return; }
+        ImageView iv = new ImageView(this);
+        iv.setBackgroundColor(Color.WHITE);
+        iv.setAdjustViewBounds(true);
+        AlertDialog d = new AlertDialog.Builder(this).setView(iv).setPositiveButton("Close", null).show();
+        boolean[] stop = {false};
+        d.setOnDismissListener(x -> stop[0] = true);
+        new Thread(() -> {
+            int step = Math.max(1, fs.length / 600); // replay in ~20 s max
+            for (int i = 0; i < fs.length && !stop[0]; i += step) {
+                Bitmap b = android.graphics.BitmapFactory.decodeFile(fs[i].getPath());
+                runOnUiThread(() -> iv.setImageBitmap(b));
+                try { Thread.sleep(33); } catch (InterruptedException e) { return; }
+            }
+        }).start();
+    }
+
+    // ---------- Saved selections ----------
+
+    private final java.util.ArrayList<byte[]> savedSel = new java.util.ArrayList<>();
+
+    private void saveSelection() {
+        if (canvas.sel == null) { toast("Nothing is selected"); return; }
+        savedSel.add(CanvasView.deflate(canvas.sel));
+        writeSelections();
+        toast("Selection " + savedSel.size() + " saved");
+    }
+
+    private void loadSelectionMenu(View anchor) {
+        if (savedSel.isEmpty()) { toast("No saved selections"); return; }
+        PopupMenu m = new PopupMenu(this, anchor);
+        for (int i = 0; i < savedSel.size(); i++) m.getMenu().add(0, i, i, "Load selection " + (i + 1));
+        m.getMenu().add(0, 999, 999, "Delete all saved selections");
+        m.setOnMenuItemClickListener(it -> {
+            if (it.getItemId() == 999) { savedSel.clear(); writeSelections(); return true; }
+            byte[] b = CanvasView.inflate(savedSel.get(it.getItemId()), canvas.docW * canvas.docH);
+            if (b != null) canvas.setSelection(b); else toast("Saved selection doesn't fit this canvas size");
+            return true;
+        });
+        m.show();
+    }
+
+    private void writeSelections() {
+        try (java.io.DataOutputStream o = new java.io.DataOutputStream(new FileOutputStream(selFile(curId)))) {
+            o.writeInt(savedSel.size());
+            for (byte[] b : savedSel) { o.writeInt(b.length); o.write(b); }
+        } catch (Exception ignored) { }
+    }
+
+    private void loadSelections() {
+        savedSel.clear();
+        try (java.io.DataInputStream in = new java.io.DataInputStream(new FileInputStream(selFile(curId)))) {
+            int n = in.readInt();
+            for (int i = 0; i < n; i++) { byte[] b = new byte[in.readInt()]; in.readFully(b); savedSel.add(b); }
+        } catch (Exception ignored) { }
     }
 }

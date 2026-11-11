@@ -25,6 +25,7 @@ final class Psd {
     static final class Doc {
         int w, h;
         final ArrayList<CanvasView.Layer> layers = new ArrayList<>();
+        final java.util.HashMap<Integer, CanvasView.Group> groups = new java.util.HashMap<>();
     }
 
     // ---------------- Reading ----------------
@@ -73,7 +74,9 @@ final class Psd {
         int[][] chIds = new int[count][];
         long[][] chLens = new long[count][];
         int[] opac = new int[count], blend = new int[count];
-        boolean[] hidden = new boolean[count], folder = new boolean[count], clip = new boolean[count], lock = new boolean[count];
+        boolean[] hidden = new boolean[count], clip = new boolean[count], lock = new boolean[count], maskOff = new boolean[count];
+        int[] folder = new int[count], maskDef = new int[count];
+        int[][] mrect = new int[count][];
         String[] names = new String[count];
 
         for (int i = 0; i < count; i++) {
@@ -99,7 +102,13 @@ final class Psd {
             byte[] extra = new byte[in.readInt()];
             in.readFully(extra);
             DataInputStream ex = new DataInputStream(new java.io.ByteArrayInputStream(extra));
-            skip(ex, ex.readInt()); // layer mask
+            int ml = ex.readInt(); // layer mask
+            if (ml >= 18) {
+                mrect[i] = new int[]{ex.readInt(), ex.readInt(), ex.readInt(), ex.readInt()};
+                maskDef[i] = ex.readUnsignedByte();
+                maskOff[i] = (ex.readUnsignedByte() & 2) != 0;
+                skip(ex, ml - 18);
+            } else skip(ex, ml);
             skip(ex, ex.readInt()); // blending ranges
             int nl = ex.readUnsignedByte();
             byte[] nb = new byte[nl];
@@ -118,31 +127,66 @@ final class Psd {
                         names[i] = sb.toString();
                         skip(ex, len - 4 - 2L * n);
                     } else if (key == 0x6C736374) { // lsct = group/folder marker
-                        folder[i] = ex.readInt() != 0;
+                        folder[i] = ex.readInt();
                         skip(ex, len - 4);
                     } else skip(ex, len);
                 }
             } catch (IOException ignored) { }
         }
 
+        java.util.ArrayDeque<Integer> stack = new java.util.ArrayDeque<>();
+        int nextId = 1;
         for (int i = 0; i < count; i++) {
             int t = rects[i][0], l = rects[i][1], b = rects[i][2], r = rects[i][3];
             int lw = r - l, lh = b - t;
             byte[][] ch = new byte[4][]; // 0..2 colour, 3 alpha
+            byte[] mch = null;
             for (int c = 0; c < chIds[i].length; c++) {
                 byte[] data = new byte[(int) chLens[i][c]];
                 in.readFully(data);
                 int id = chIds[i][c];
                 int slot = id == -1 ? 3 : (id >= 0 && id <= 2 ? id : -1);
                 if (slot >= 0 && lw > 0 && lh > 0) ch[slot] = decode(data, lw, lh);
+                if (id == -2 && mrect[i] != null) {
+                    int mw = mrect[i][3] - mrect[i][1], mh = mrect[i][2] - mrect[i][0];
+                    if (mw > 0 && mh > 0) mch = decode(data, mw, mh);
+                }
             }
-            if (folder[i]) continue;
+            // Groups: in PSD order (bottom to top) a divider (3) opens, the folder record (1/2) closes
+            if (folder[i] == 3) { stack.push(nextId++); continue; }
+            if (folder[i] == 1 || folder[i] == 2) {
+                int g = stack.isEmpty() ? nextId++ : stack.pop();
+                CanvasView.Group gr = new CanvasView.Group(names[i]);
+                gr.opacity = opac[i];
+                gr.visible = !hidden[i];
+                gr.collapsed = folder[i] == 2;
+                doc.groups.put(g, gr);
+                continue;
+            }
             CanvasView.Layer layer = new CanvasView.Layer(Bitmap.createBitmap(doc.w, doc.h, Bitmap.Config.ARGB_8888), names[i]);
             layer.opacity = opac[i];
             layer.visible = !hidden[i];
             layer.blend = blend[i];
             layer.clip = clip[i];
             layer.alphaLock = lock[i];
+            layer.group = stack.isEmpty() ? 0 : stack.peek();
+            if (mrect[i] != null) { // layer mask
+                CanvasView.Layer m = new CanvasView.Layer(Bitmap.createBitmap(doc.w, doc.h, Bitmap.Config.ARGB_8888), names[i] + " mask");
+                m.bmp.eraseColor(0xFF000000 | maskDef[i] * 0x010101);
+                if (mch != null) {
+                    int mw = mrect[i][3] - mrect[i][1], mh = mrect[i][2] - mrect[i][0];
+                    Bitmap part = compose(new byte[][]{mch, null, null, null}, mw, mh, 1);
+                    Matrix mm = new Matrix();
+                    mm.setScale(s, s);
+                    mm.preTranslate(mrect[i][1], mrect[i][0]);
+                    Paint pp = new Paint(Paint.FILTER_BITMAP_FLAG);
+                    pp.setBlendMode(android.graphics.BlendMode.SRC);
+                    new Canvas(m.bmp).drawBitmap(part, mm, pp);
+                    part.recycle();
+                }
+                layer.mask = m;
+                layer.maskOn = !maskOff[i];
+            }
             if (lw > 0 && lh > 0 && ch[0] != null) {
                 Bitmap part = compose(ch, lw, lh, mode);
                 Matrix m = new Matrix();
@@ -252,7 +296,8 @@ final class Psd {
 
     // ---------------- Writing ----------------
 
-    static void write(OutputStream os, int w, int h, List<CanvasView.Layer> layers, Bitmap flat) throws IOException {
+    static void write(OutputStream os, int w, int h, List<CanvasView.Layer> layers,
+                      java.util.Map<Integer, CanvasView.Group> groups, Bitmap flat) throws IOException {
         DataOutputStream out = new DataOutputStream(new BufferedOutputStream(os, 65536));
         out.writeInt(0x38425053);
         out.writeShort(1);
@@ -268,14 +313,21 @@ final class Psd {
         ByteArrayOutputStream recs = new ByteArrayOutputStream();
         DataOutputStream r = new DataOutputStream(recs);
         ByteArrayOutputStream data = new ByteArrayOutputStream();
-        r.writeShort(layers.size());
-        for (CanvasView.Layer l : layers) {
+        int records = 0;
+        for (int i = 0; i < layers.size(); i++) {
+            CanvasView.Layer l = layers.get(i);
+            int g = l.group;
+            boolean opens = g != 0 && (i == 0 || layers.get(i - 1).group != g);
+            boolean closes = g != 0 && (i == layers.size() - 1 || layers.get(i + 1).group != g);
+            if (opens) { marker(r, data, "</Layer group>", 255, true, 3); records++; }
             byte[] alpha = channel(l.bmp, 24, true);
             byte[] grey = channel(l.bmp, 0, true);
+            byte[] mask = l.mask != null ? channel(l.mask.bmp, 0, true) : null;
             r.writeInt(0); r.writeInt(0); r.writeInt(h); r.writeInt(w);
-            r.writeShort(4);
+            r.writeShort(mask != null ? 5 : 4);
             r.writeShort(-1); r.writeInt(alpha.length);
             for (int c = 0; c < 3; c++) { r.writeShort(c); r.writeInt(grey.length); }
+            if (mask != null) { r.writeShort(-2); r.writeInt(mask.length); }
             r.writeBytes("8BIM" + KEYS[l.blend]);
             r.writeByte(l.opacity);
             r.writeByte(l.clip ? 1 : 0);
@@ -284,15 +336,34 @@ final class Psd {
             byte[] name = l.name.getBytes(StandardCharsets.ISO_8859_1);
             int nl = Math.min(name.length, 255);
             int padded = (nl + 1 + 3) / 4 * 4;
-            r.writeInt(8 + padded);
-            r.writeInt(0); // mask
+            int maskLen = mask != null ? 20 : 0;
+            r.writeInt(4 + maskLen + 4 + padded);
+            r.writeInt(maskLen);
+            if (mask != null) {
+                r.writeInt(0); r.writeInt(0); r.writeInt(h); r.writeInt(w);
+                r.writeByte(255);
+                r.writeByte(l.maskOn ? 0 : 2);
+                r.writeShort(0);
+            }
             r.writeInt(0); // blending ranges
             r.writeByte(nl);
             r.write(name, 0, nl);
             r.write(new byte[padded - nl - 1]);
             data.write(alpha);
             data.write(grey); data.write(grey); data.write(grey);
+            if (mask != null) data.write(mask);
+            records++;
+            if (closes) {
+                CanvasView.Group gr = groups.get(g);
+                marker(r, data, gr == null ? "Group" : gr.name, gr == null ? 255 : gr.opacity,
+                        gr == null || gr.visible, gr != null && gr.collapsed ? 2 : 1);
+                records++;
+            }
         }
+        byte[] recBytes = recs.toByteArray();
+        recs.reset();
+        new DataOutputStream(recs).writeShort(records);
+        recs.write(recBytes);
         int infoLen = recs.size() + data.size();
         int pad = infoLen % 2;
         out.writeInt(4 + infoLen + pad + 4);
@@ -309,6 +380,32 @@ final class Psd {
         for (int c = 0; c < 3; c++) out.write(g, 0, countsLen);
         for (int c = 0; c < 3; c++) out.write(g, countsLen, g.length - countsLen);
         out.flush();
+    }
+
+    /** Empty layer record used for group start/end markers (lsct). */
+    private static void marker(DataOutputStream r, ByteArrayOutputStream data, String nm, int opacity, boolean visible, int type) throws IOException {
+        r.writeInt(0); r.writeInt(0); r.writeInt(0); r.writeInt(0);
+        r.writeShort(4);
+        r.writeShort(-1); r.writeInt(2);
+        for (int c = 0; c < 3; c++) { r.writeShort(c); r.writeInt(2); }
+        r.writeBytes("8BIMpass");
+        r.writeByte(opacity);
+        r.writeByte(0);
+        r.writeByte(visible ? 0 : 2);
+        r.writeByte(0);
+        byte[] name = nm.getBytes(StandardCharsets.ISO_8859_1);
+        int nl = Math.min(name.length, 255);
+        int padded = (nl + 1 + 3) / 4 * 4;
+        r.writeInt(4 + 4 + padded + 16);
+        r.writeInt(0);
+        r.writeInt(0);
+        r.writeByte(nl);
+        r.write(name, 0, nl);
+        r.write(new byte[padded - nl - 1]);
+        r.writeBytes("8BIMlsct");
+        r.writeInt(4);
+        r.writeInt(type);
+        for (int c = 0; c < 4; c++) data.write(new byte[2]); // raw, zero size
     }
 
     /** One channel, RLE: [compression flag if withFlag] + row counts + rows. shift 24 = alpha, 0 = blue/grey. */
