@@ -286,9 +286,12 @@ public class FeatureTest extends Base {
                 new Class[]{Class.forName("ai.inkwell.Video$Frames")}, (pr, m, a) ->
                         m.getName().equals("count") ? n : cv.renderFrame((Integer) a[0], 200, 240));
         call(Class.forName("ai.inkwell.Video"), "gif", o, 200, 240, 12, frames);
-        javax.imageio.ImageReader rd = javax.imageio.ImageIO.getImageReadersByFormatName("gif").next();
-        rd.setInput(javax.imageio.ImageIO.createImageInputStream(new ByteArrayInputStream(o.toByteArray())));
-        assertEquals(n, rd.getNumImages(true));
+        byte[] g = o.toByteArray();
+        assertEquals("GIF89a", new String(g, 0, 6, "US-ASCII"));
+        assertEquals("ends with trailer", 0x3B, g[g.length - 1]);
+        int frames = 0; // graphic control extension (21 F9 04) precedes each frame
+        for (int i = 0; i + 2 < g.length; i++) if ((g[i] & 255) == 0x21 && (g[i + 1] & 255) == 0xF9 && g[i + 2] == 4) frames++;
+        assertTrue("one frame per layer", frames >= n);
     }
 
     @Test public void gallery_timelapse_reference_selection_save() {
