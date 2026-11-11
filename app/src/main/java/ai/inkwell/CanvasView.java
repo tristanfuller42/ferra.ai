@@ -182,6 +182,8 @@ public class CanvasView extends View {
 
     // Transform (Move tool)
     private Bitmap floatBmp;
+    private PixelEdit moveEdit;
+    private byte[] selBeforeMove;
     private final Matrix poly = new Matrix();
     private float[] srcCorners = new float[8], dstCorners = new float[8];
     public int xform;                  // 0 uniform, 1 freeform, 2 distort, 3 warp
@@ -1320,7 +1322,9 @@ public class CanvasView extends View {
         if (moving) return;
         moving = true;
         Layer l = tgt();
-        push(new PixelEdit(l, new Rect(0, 0, docW, docH)));
+        moveEdit = new PixelEdit(l, new Rect(0, 0, docW, docH));
+        selBeforeMove = selCopy();
+        push(moveEdit);
         int n = docW * docH;
         int[] px = new int[n], fl = new int[n];
         l.bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
@@ -1373,7 +1377,17 @@ public class CanvasView extends View {
             sel = a8ToBytes(b);
             a.recycle(); b.recycle();
             updateSelOverlay();
+            if (!undoList.isEmpty() && undoList.get(undoList.size() - 1) == moveEdit) {
+                undoList.remove(undoList.size() - 1); // one undo step for pixels + selection
+                int n = docW * docH;
+                PixelEdit pe = moveEdit;
+                byte[] sb = deflate(selBeforeMove), sa = deflate(sel);
+                push(new Op(() -> { pe.undo(); restoreSel(sb, n); }, () -> { pe.redo(); restoreSel(sa, n); },
+                        pe.bytes() + sb.length + sa.length));
+            }
         }
+        moveEdit = null;
+        selBeforeMove = null;
         moveT.reset();
         poly.reset();
         dragHandle = -1;
@@ -1510,8 +1524,25 @@ public class CanvasView extends View {
         invalidate();
     }
 
+    /** Makes the selection change since `before` an undo step. */
+    private void recordSel(byte[] before) {
+        int n = docW * docH;
+        byte[] b = before == null ? null : deflate(before);
+        byte[] a = sel == null ? null : deflate(sel);
+        long size = 64 + (b == null ? 0 : b.length) + (a == null ? 0 : a.length);
+        push(new Op(() -> restoreSel(b, n), () -> restoreSel(a, n), size));
+    }
+
+    private void restoreSel(byte[] z, int n) {
+        sel = z == null ? null : inflate(z, n);
+        updateSelOverlay();
+    }
+
+    private byte[] selCopy() { return sel == null ? null : sel.clone(); }
+
     /** Combines a new shape mask into the selection (add or subtract). */
     private void combineSel(byte[] m) {
+        byte[] before = selCopy();
         if (sel == null) {
             sel = new byte[docW * docH];
             if (selSubtract) java.util.Arrays.fill(sel, (byte) 255);
@@ -1525,6 +1556,7 @@ public class CanvasView extends View {
         }
         if (any == 0) sel = null;
         updateSelOverlay();
+        recordSel(before);
         changed();
     }
 
@@ -1585,30 +1617,43 @@ public class CanvasView extends View {
         invalidate();
     }
 
-    public void setSelection(byte[] m) { sel = m; updateSelOverlay(); changed(); }
+    public void setSelection(byte[] m) { byte[] b = selCopy(); sel = m; updateSelOverlay(); recordSel(b); changed(); }
 
-    public void clearSelection() { sel = null; updateSelOverlay(); changed(); }
+    public void clearSelection() {
+        if (sel == null) return;
+        byte[] b = selCopy();
+        sel = null;
+        updateSelOverlay();
+        recordSel(b);
+        changed();
+    }
 
     public void invertSelection() {
+        byte[] before = selCopy();
         if (sel == null) { sel = new byte[docW * docH]; java.util.Arrays.fill(sel, (byte) 255); }
         else for (int i = 0; i < sel.length; i++) sel[i] = (byte) (255 - (sel[i] & 255));
         updateSelOverlay();
+        recordSel(before);
         changed();
     }
 
     public void featherSelection(float radius) {
         if (sel == null) return;
+        byte[] before = selCopy();
         Fx.feather(sel, docW, docH, radius);
         updateSelOverlay();
+        recordSel(before);
     }
 
     /** Selects the painted pixels of the current layer. */
     public void selectLayer() {
         int[] px = new int[docW * docH];
         cur().bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+        byte[] before = selCopy();
         sel = new byte[px.length];
         for (int i = 0; i < px.length; i++) sel[i] = (byte) (px[i] >>> 24);
         updateSelOverlay();
+        recordSel(before);
         changed();
     }
 

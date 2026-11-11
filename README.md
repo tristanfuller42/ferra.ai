@@ -31,7 +31,7 @@ Layout matches Procreate so you can switch between the two easily:
 - **Layer masks**: layer options → Add mask; tap the mask thumbnail to paint it (black hides, white shows).
   Apply, disable or delete the mask. Saved in PSD.
 - **Layer groups**: Group with layer below / New group; collapse, hide, rename, group opacity, flatten. Saved in PSD.
-- **Selections**: Save and Load in the selection bar (kept with each drawing).
+- **Selections**: Save and Load in the selection bar (kept with each drawing). Selection changes can be undone like paint.
 - **Reference window**: Actions → Reference. Shows the whole canvas live, or an imported image (tap it to pick a grey).
   Drag the title to move, ⤡ to resize.
 - **Time-lapse**: every stroke is recorded. Actions → Time-lapse → replay, or export MP4 (full length or 30 seconds).
