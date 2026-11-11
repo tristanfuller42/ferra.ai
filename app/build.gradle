@@ -7,8 +7,9 @@ android {
         applicationId "ai.inkwell"
         minSdk 30
         targetSdk 35
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.1"
+        resourceConfigurations += ["en"]
     }
     buildTypes {
         release {
@@ -25,5 +26,4 @@ android {
     }
     dependenciesInfo { includeInApk false; includeInBundle false }
     packaging { resources { excludes += ["**"] } }
-    androidResources { localeFilters += ["en"] }
 }
