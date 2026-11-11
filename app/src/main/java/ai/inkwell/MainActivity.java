@@ -63,6 +63,7 @@ public class MainActivity extends Activity {
         Rect max = getWindowManager().getMaximumWindowMetrics().getBounds();
         newDocument(Math.min(max.width(), max.height()), Math.max(max.width(), max.height()));
         canvas.onChange = this::refreshPanel;
+        canvas.onGreyPicked = this::updateColor;
 
         // ---- Toolbar ----
         LinearLayout bar = new LinearLayout(this);
@@ -84,7 +85,7 @@ public class MainActivity extends Activity {
         button(bar, "Layers", v -> togglePanel());
         button(bar, "Open", this::openMenu);
         button(bar, "Export", this::exportMenu);
-        button(bar, "Fit", v -> canvas.fit());
+        button(bar, "Fit", v -> canvas.animateFit());
         button(bar, "Canvas", v -> canvasDialog());
         setTool(CanvasView.DRAW);
         updateBrush();
@@ -144,6 +145,11 @@ public class MainActivity extends Activity {
             return WindowInsets.CONSUMED;
         });
         setContentView(root);
+        canvas.onToggleUi = () -> { // four-finger tap: hide/show toolbar and panel
+            boolean show = scroll.getVisibility() != View.VISIBLE;
+            scroll.setVisibility(show ? View.VISIBLE : View.GONE);
+            if (!show) panel.setVisibility(View.GONE);
+        };
 
         loadBrushes();
         // Restore last drawing, then handle "Open with" / "Share" intents

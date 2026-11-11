@@ -18,8 +18,14 @@ A tiny greyscale drawing app for Android (built for Pixel Fold). No libraries, p
     Not imported: other Procreate/Photoshop dynamics (jitter, tilt, rotation, wet mix, etc.).
     Long-press an imported brush to delete it.
   - The eraser uses the selected brush's shape. Stylus eraser end or side button also erases.
-- **Two fingers**: pinch to zoom, drag to pan, twist to rotate. **Fit** resets the view.
-- **Two-finger tap** = undo, **three-finger tap** = redo. Up to 100 steps.
+- **Gestures** (like Procreate):
+  - Two fingers: pinch zoom, drag pan, twist rotate. **Quick pinch-in** = fit canvas to screen.
+  - Two-finger tap = undo. Two-finger **hold** = keep undoing. Three-finger tap = redo.
+  - Three-finger **scrub** (side to side) = clear layer.
+  - Four-finger tap = hide/show toolbar (full screen).
+  - Touch and **hold** with a finger = eyedropper (pick a grey); keep dragging to adjust.
+  - Draw and **hold** at the end = QuickShape: snaps to a straight line (keep holding and move to adjust),
+    or an ellipse if the stroke ends near where it started.
 - **Move tool**: drag moves the current layer; pinch/twist scales and rotates it. Applied when you pick another tool.
 - **Layers**: add, copy, delete, reorder, merge down, clear, hide/show, opacity.
 - Once a stylus is used, single fingers only pan (palm rejection).

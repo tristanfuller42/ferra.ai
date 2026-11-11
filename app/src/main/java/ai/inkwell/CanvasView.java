@@ -247,12 +247,36 @@ public class CanvasView extends View {
         else { view.postTranslate((w - ow) / 2f, (h - oh) / 2f); invalidate(); }
     }
 
+    private Matrix fitMatrix() {
+        Matrix m = new Matrix();
+        float s = Math.min((float) getWidth() / docW, (float) getHeight() / docH) * 0.96f;
+        m.setScale(s, s);
+        m.postTranslate((getWidth() - docW * s) / 2f, (getHeight() - docH * s) / 2f);
+        return m;
+    }
+
     public void fit() {
         if (docW == 0) return;
-        float s = Math.min((float) getWidth() / docW, (float) getHeight() / docH) * 0.96f;
-        view.setScale(s, s);
-        view.postTranslate((getWidth() - docW * s) / 2f, (getHeight() - docH * s) / 2f);
+        view.set(fitMatrix());
         invalidate();
+    }
+
+    /** Smoothly fits the canvas to the screen (quick pinch-in, Fit button). */
+    public void animateFit() {
+        if (docW == 0) return;
+        float[] a = new float[9], b = new float[9], c = new float[9];
+        view.getValues(a);
+        fitMatrix().getValues(b);
+        android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
+        va.setDuration(250);
+        va.setInterpolator(new android.view.animation.DecelerateInterpolator());
+        va.addUpdateListener(an -> {
+            float t = (float) an.getAnimatedValue();
+            for (int k = 0; k < 9; k++) c[k] = a[k] + (b[k] - a[k]) * t;
+            view.setValues(c);
+            invalidate();
+        });
+        va.start();
     }
 
     /** Move-tool transform expressed in canvas coordinates. */
@@ -287,6 +311,104 @@ public class CanvasView extends View {
 
     // ---------- Input ----------
 
+    // ---- Procreate-style extras ----
+    public Runnable onGreyPicked, onToggleUi;
+    private boolean picking, shaping, shapeClosed, holdUndoing, scrubbed;
+    private float downSX, downSY, holdSX, holdSY, curX, curY, gScale = 1f;
+    private float[] spts = new float[300];
+    private int sn, gCount, scrubDir, scrubFlips;
+    private float pathLen, scrubX, shapeP, ecx, ecy, erx, ery;
+
+    /** Touch and hold: eyedropper. */
+    private final Runnable pickHold = () -> {
+        if (!stroking && !gesture) return;
+        abortStroke();
+        picking = true;
+        pickAt(downSX, downSY);
+    };
+
+    /** Draw and hold: QuickShape (straight line, or ellipse if the stroke closes on itself). */
+    private final Runnable shapeHold = () -> {
+        if (!stroking || shaping || sn < 6 || pathLen < 12) return;
+        shaping = true;
+        float sum = 0, x0 = Float.MAX_VALUE, y0 = Float.MAX_VALUE, x1 = -Float.MAX_VALUE, y1 = -Float.MAX_VALUE;
+        for (int k = 0; k < sn; k += 3) {
+            x0 = Math.min(x0, spts[k]); x1 = Math.max(x1, spts[k]);
+            y0 = Math.min(y0, spts[k + 1]); y1 = Math.max(y1, spts[k + 1]);
+            sum += spts[k + 2];
+        }
+        shapeP = sum / (sn / 3);
+        float gap = (float) Math.hypot(curX - spts[0], curY - spts[1]);
+        shapeClosed = gap < pathLen * 0.15f && (x1 - x0) > 4 && (y1 - y0) > 4;
+        ecx = (x0 + x1) / 2; ecy = (y0 + y1) / 2; erx = (x1 - x0) / 2; ery = (y1 - y0) / 2;
+        renderShape();
+    };
+
+    /** Two-finger hold: keep undoing. */
+    private final Runnable undoHold = new Runnable() {
+        public void run() {
+            if (!gesture || gCount != 2 || gMax != 2 || gMoved > 30) return;
+            holdUndoing = true;
+            undo();
+            postDelayed(this, 150);
+        }
+    };
+
+    private void addPt(float x, float y, float p) {
+        if (sn + 3 > spts.length) spts = java.util.Arrays.copyOf(spts, spts.length * 2);
+        if (sn > 0) pathLen += (float) Math.hypot(x - spts[sn - 3], y - spts[sn - 2]);
+        spts[sn++] = x; spts[sn++] = y; spts[sn++] = p;
+        curX = x; curY = y;
+    }
+
+    private void startAt(float x, float y, float p) {
+        lx = x; ly = y; lp = p;
+        stamp(x, y, p);
+        nextDab = step(p);
+    }
+
+    /** Undo the stroke's pixels so far, keeping the stroke active. */
+    private void restoreStroke() {
+        if (!eventDirty.isEmpty()) { strokeDirty.union(eventDirty); eventDirty.setEmpty(); }
+        if (strokeDirty.isEmpty()) return;
+        clearMask(strokeDirty);
+        new Canvas(cur().bmp).drawBitmap(backup, strokeDirty, strokeDirty, copy);
+        strokeDirty.setEmpty();
+    }
+
+    private void renderShape() {
+        restoreStroke();
+        if (shapeClosed) {
+            startAt(ecx + erx, ecy, shapeP);
+            int n = 120;
+            for (int k = 1; k <= n; k++) {
+                double t = 2 * Math.PI * k / n;
+                segmentTo(ecx + erx * (float) Math.cos(t), ecy + ery * (float) Math.sin(t), shapeP);
+            }
+        } else {
+            startAt(spts[0], spts[1], shapeP);
+            segmentTo(curX, curY, shapeP);
+        }
+        flush();
+    }
+
+    /** Sets the ink grey to the composited colour under a screen point. */
+    private void pickAt(float sx, float sy) {
+        view.invert(inverse);
+        map(sx, sy);
+        int x = (int) pt[0], y = (int) pt[1];
+        if (x < 0 || y < 0 || x >= docW || y >= docH) return;
+        float g = 255;
+        for (Layer l : layers) {
+            if (!l.visible) continue;
+            int px = l.bmp.getPixel(x, y);
+            float a = (px >>> 24) / 255f * l.opacity / 255f;
+            g = (px & 255) * a + g * (1 - a);
+        }
+        grey = Math.round(g);
+        if (onGreyPicked != null) onGreyPicked.run();
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent e) {
         if (docW == 0) return false;
@@ -306,27 +428,54 @@ public class CanvasView extends View {
                         || (e.getButtonState() & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0;
                 penInput = isPen;
                 stroking = true;
+                picking = shaping = false;
                 strokeDirty.setEmpty();
+                sn = 0; pathLen = 0;
+                downSX = holdSX = e.getX(); downSY = holdSY = e.getY();
                 map(e.getX(), e.getY());
-                lx = pt[0]; ly = pt[1]; lp = e.getPressure();
-                stamp(lx, ly, lp);
-                nextDab = step(lp);
+                addPt(pt[0], pt[1], e.getPressure());
+                startAt(pt[0], pt[1], e.getPressure());
                 flush();
+                if (!isPen) postDelayed(pickHold, 450);
+                postDelayed(shapeHold, 550);
                 break;
-            case MotionEvent.ACTION_MOVE:
+            case MotionEvent.ACTION_MOVE: {
+                if (picking) { pickAt(e.getX(), e.getY()); break; }
                 if (!stroking) break;
+                if (Math.hypot(e.getX() - downSX, e.getY() - downSY) > 12) removeCallbacks(pickHold);
+                if (shaping) {
+                    map(e.getX(), e.getY());
+                    curX = pt[0]; curY = pt[1];
+                    if (!shapeClosed) renderShape();
+                    break;
+                }
                 for (int i = 0; i < e.getHistorySize(); i++) {
                     map(e.getHistoricalX(i), e.getHistoricalY(i));
+                    addPt(pt[0], pt[1], e.getHistoricalPressure(i));
                     segmentTo(pt[0], pt[1], e.getHistoricalPressure(i));
                 }
                 map(e.getX(), e.getY());
+                addPt(pt[0], pt[1], e.getPressure());
                 segmentTo(pt[0], pt[1], e.getPressure());
                 flush();
+                if (Math.hypot(e.getX() - holdSX, e.getY() - holdSY) > 6) {
+                    holdSX = e.getX(); holdSY = e.getY();
+                    removeCallbacks(shapeHold);
+                    postDelayed(shapeHold, 550);
+                }
                 break;
+            }
             case MotionEvent.ACTION_UP:
-                if (stroking) commitStroke();
+                removeCallbacks(pickHold);
+                removeCallbacks(shapeHold);
+                if (picking) picking = false;
+                else if (stroking) commitStroke();
+                shaping = false;
                 break;
             case MotionEvent.ACTION_CANCEL:
+                removeCallbacks(pickHold);
+                removeCallbacks(shapeHold);
+                picking = shaping = false;
                 abortStroke();
                 break;
         }
@@ -488,32 +637,58 @@ public class CanvasView extends View {
     }
 
     private boolean handleGesture(MotionEvent e, int action, Matrix target) {
+        gCount = e.getPointerCount();
         if (!gesture) {
             gesture = true;
+            removeCallbacks(shapeHold);
+            removeCallbacks(pickHold);
             abortStroke();
             if (target == moveT) moving = true;
             gStart = e.getEventTime();
             gMoved = 0;
-            gMax = e.getPointerCount();
+            gScale = 1f;
+            gMax = gCount;
+            holdUndoing = scrubbed = picking = false;
+            scrubDir = scrubFlips = 0;
             reset(e, -1);
+            scrubX = gX;
+            downSX = e.getX(); downSY = e.getY();
+            if (target == view) {
+                if (gCount == 1) postDelayed(pickHold, 450);
+                postDelayed(undoHold, 600);
+            }
             return true;
         }
-        gMax = Math.max(gMax, e.getPointerCount());
+        gMax = Math.max(gMax, gCount);
+        if (gMax > 1) removeCallbacks(pickHold);
         switch (action) {
-            case MotionEvent.ACTION_POINTER_DOWN: reset(e, -1); break;
+            case MotionEvent.ACTION_POINTER_DOWN: reset(e, -1); scrubX = gX; break;
             case MotionEvent.ACTION_POINTER_UP: reset(e, e.getActionIndex()); break;
             case MotionEvent.ACTION_MOVE: {
+                if (picking) { pickAt(e.getX(), e.getY()); break; }
                 float[] m = state(e, -1);
                 float dx = m[0] - gX, dy = m[1] - gY;
-                target.postTranslate(dx, dy);
                 gMoved += Math.abs(dx) + Math.abs(dy);
-                if (gDist > 0 && m[2] > 0) {
-                    float s = m[2] / gDist;
-                    float a = m[3] - gAngle;
-                    if (a > 180) a -= 360; else if (a < -180) a += 360;
-                    target.postScale(s, s, m[0], m[1]);
-                    target.postRotate(a, m[0], m[1]);
-                    gMoved += Math.abs(m[2] - gDist);
+                if (gMoved > 30) removeCallbacks(pickHold);
+                if (target == view && gCount >= 3) {
+                    // Three-finger scrub (side to side) clears the layer
+                    int dir = dx > 2 ? 1 : dx < -2 ? -1 : 0;
+                    if (dir != 0) {
+                        if (scrubDir == 0 || dir == scrubDir) { scrubDir = dir; scrubX = m[0]; }
+                        else if (Math.abs(m[0] - scrubX) > 40) { scrubFlips++; scrubDir = dir; scrubX = m[0]; }
+                    }
+                    if (scrubFlips >= 3 && !scrubbed) { scrubbed = true; clearLayer(); }
+                } else {
+                    target.postTranslate(dx, dy);
+                    if (gDist > 0 && m[2] > 0) {
+                        float s = m[2] / gDist;
+                        float a = m[3] - gAngle;
+                        if (a > 180) a -= 360; else if (a < -180) a += 360;
+                        target.postScale(s, s, m[0], m[1]);
+                        target.postRotate(a, m[0], m[1]);
+                        gMoved += Math.abs(m[2] - gDist);
+                        gScale *= s;
+                    }
                 }
                 gX = m[0]; gY = m[1]; gDist = m[2]; gAngle = m[3];
                 invalidate();
@@ -522,10 +697,18 @@ public class CanvasView extends View {
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 gesture = false;
-                if (target == view && action == MotionEvent.ACTION_UP
-                        && e.getEventTime() - gStart < 300 && gMoved < 40) {
-                    if (gMax == 2) undo();
-                    else if (gMax == 3) redo();
+                removeCallbacks(pickHold);
+                removeCallbacks(undoHold);
+                if (picking) { picking = false; break; }
+                if (target == view && action == MotionEvent.ACTION_UP) {
+                    long dt = e.getEventTime() - gStart;
+                    if (!holdUndoing && !scrubbed && dt < 300 && gMoved < 40) {
+                        if (gMax == 2) undo();
+                        else if (gMax == 3) redo();
+                        else if (gMax == 4 && onToggleUi != null) onToggleUi.run();
+                    } else if (dt < 450 && gScale < 0.75f && gMax == 2) {
+                        animateFit(); // quick pinch-in
+                    }
                 }
                 break;
         }
