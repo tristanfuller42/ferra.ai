@@ -42,7 +42,7 @@ Layout matches Procreate so you can switch between the two easily:
 - **Selections**: Save and Load in the selection bar (kept with each drawing). Selection changes can be undone like paint.
 - **Reference window**: Actions → Reference. Shows the whole canvas live, or an imported image (tap it to pick a grey).
   Drag the title to move, ⤡ to resize.
-- **Time-lapse**: every stroke is recorded. Actions → Time-lapse → replay, or export MP4 (full length or 30 seconds).
+- **Time-lapse**: every stroke is recorded. Actions → Video → replay (full screen; touch and hold to pause, drag left/right to scrub), or export MP4 (full length or 30 seconds).
 - **Animation Assist**: Actions → Animation Assist. Each layer is a frame; timeline with play, onion skins,
   frames per second, background layer; export animated GIF or MP4.
 
@@ -119,7 +119,8 @@ long-press to rename, duplicate or delete. Drawings save automatically.
     Imported: tip shape, grain texture (Procreate), spacing and pressure size/opacity (Procreate).
     Not imported: other Procreate/Photoshop dynamics (jitter, tilt, rotation, wet mix, etc.).
     Long-press an imported brush to delete it.
-  - Brush, Smudge, Eraser and Clone each remember their own brush, size and opacity (like Procreate).
+  - Brush, Smudge, Eraser and Clone each remember their own brush, size and opacity, and every brush remembers its own size
+    and opacity for each of them (like Procreate).
   - Stylus eraser end or side button also erases.
 - **Gestures** (like Procreate):
   - Two fingers: pinch zoom, drag pan, twist rotate. **Quick pinch-in** = fit canvas to screen.

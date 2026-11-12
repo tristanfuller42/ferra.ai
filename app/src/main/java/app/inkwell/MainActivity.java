@@ -70,7 +70,29 @@ public class MainActivity extends Activity {
         tBrush[k] = canvas.brush.name;
         tSize[k] = canvas.size;
         tOp[k] = canvas.opacity;
-        if (prefs != null) prefs.edit().putString("tb" + k, tBrush[k]).putFloat("ts" + k, tSize[k]).putFloat("to" + k, tOp[k]).apply();
+        if (prefs != null) prefs.edit().putString("tb" + k, tBrush[k]).putFloat("ts" + k, tSize[k]).putFloat("to" + k, tOp[k])
+                .putString("bsz" + k + ":" + tBrush[k], canvas.size + "," + canvas.opacity).apply(); // this brush's own size
+    }
+
+    /** Switches brush for the current tool; each brush keeps its own size and opacity (per tool), like Procreate. */
+    void switchBrush(CanvasView.Brush b) {
+        if (b == null) return;
+        int k = slot(canvas.tool);
+        if (k >= 0) storeTool(canvas.tool); // remember the old brush's size
+        canvas.brush = b;
+        if (k >= 0) {
+            String v = prefs.getString("bsz" + k + ":" + b.name, null);
+            if (v != null) {
+                try {
+                    String[] f = v.split(",");
+                    canvas.size = Float.parseFloat(f[0]);
+                    canvas.opacity = Float.parseFloat(f[1]);
+                } catch (Exception ignored) { }
+            }
+            storeTool(canvas.tool);
+        }
+        if (sizeS != null) { sizeS.value = (float) Math.sqrt(Math.max(0, canvas.size - 1) / 149f); sizeS.invalidate(); }
+        if (opS != null) { opS.value = canvas.opacity; opS.invalidate(); }
     }
 
     /** Puts this tool's remembered settings back on the canvas and the sidebar. */
@@ -1892,7 +1914,7 @@ public class MainActivity extends Activity {
                 row.addView(pv, new LinearLayout.LayoutParams((int) (240 * dp), (int) (36 * dp)));
                 row.setOnClickListener(v -> {
                     if (canvas.brush == br) { pop.win.dismiss(); brushStudio(br); return; }
-                    canvas.brush = br;
+                    switchBrush(br);
                     noteRecent(br);
                     fill[0].run();
                 });
@@ -1995,7 +2017,7 @@ public class MainActivity extends Activity {
     /** Long-press a brush: duplicate / reset / delete. */
     private void brushMenu(View anchor, CanvasView.Brush br, Ui.Pop lib) {
         Ui.Pop pop = new Ui.Pop(this, 240);
-        pop.item("Edit in Brush Studio", true, () -> { lib.win.dismiss(); canvas.brush = br; brushStudio(br); });
+        pop.item("Edit in Brush Studio", true, () -> { lib.win.dismiss(); switchBrush(br); brushStudio(br); });
         pop.item("Export brush", true, () -> { lib.win.dismiss(); exportBrushFile(java.util.Collections.singletonList(br), br.name + ".inkbrush"); });
         pop.item("Duplicate", true, () -> {
             CanvasView.Brush b = br.copy(br.name + " copy");
@@ -2444,8 +2466,7 @@ public class MainActivity extends Activity {
             if (b == null) { hud("That brush no longer exists"); return; }
             int tool = tok.startsWith("b:") ? CanvasView.DRAW : CanvasView.ERASE;
             setTool(tool);
-            canvas.brush = b;
-            storeTool(tool);
+            switchBrush(b);
             noteRecent(b);
             hud((tool == CanvasView.DRAW ? "Brush: " : "Eraser: ") + b.name);
             return;
@@ -3571,7 +3592,7 @@ public class MainActivity extends Activity {
                     Brushes.save(bs.get(i), new File(brushDir(), t + "_" + String.format("%04d", i) + ".fbr"));
                 runOnUiThread(() -> {
                     CanvasView.BRUSHES.addAll(bs);
-                    canvas.brush = bs.get(0);
+                    switchBrush(bs.get(0));
                     toast(bs.size() + " brush(es) imported");
                 });
             } catch (Throwable e) {
@@ -3808,6 +3829,7 @@ public class MainActivity extends Activity {
         // Back closes the innermost thing first: Brush Studio, preview, a stack, open panels, a tool mode;
         // then the canvas goes to the Gallery, and the Gallery leaves the app.
         if (studio != null) { closeStudio(); return; }
+        if (tlPlayer != null) { closeTimelapsePlayer(); return; }
         if (previewOv != null && previewOv.getParent() != null) { shell.removeView(previewOv); previewOv = null; return; }
         if (gallery != null && gallery.getVisibility() == View.VISIBLE) {
             if (openStack != null) { openStack = null; fillGallery(); return; }
@@ -4518,23 +4540,84 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private FrameLayout tlPlayer; // full-screen time-lapse replay
+
+    /** Time-lapse replay, full screen like Procreate: plays; touch and hold pauses; drag left/right scrubs; lift continues. */
     private void replayTimelapse() {
         File[] fs = tlFrames();
         if (fs.length == 0) { toast("Nothing recorded yet"); return; }
+        closeTimelapsePlayer();
+        FrameLayout ov = new FrameLayout(this);
+        ov.setBackgroundColor(0xFF111113);
+        ov.setClickable(true);
         ImageView iv = new ImageView(this);
-        iv.setBackgroundColor(Color.WHITE);
-        iv.setAdjustViewBounds(true);
-        AlertDialog d = new AlertDialog.Builder(this).setView(iv).setPositiveButton("Close", null).show();
-        boolean[] stop = {false};
-        d.setOnDismissListener(x -> stop[0] = true);
-        new Thread(() -> {
-            int step = Math.max(1, fs.length / 600); // replay in ~20 s max
-            for (int i = 0; i < fs.length && !stop[0]; i += step) {
-                Bitmap b = android.graphics.BitmapFactory.decodeFile(fs[i].getPath());
-                runOnUiThread(() -> iv.setImageBitmap(b));
-                try { Thread.sleep(33); } catch (InterruptedException e) { return; }
+        iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        ov.addView(iv, new FrameLayout.LayoutParams(-1, -1));
+        TextView info = new TextView(this);
+        info.setTextColor(0xFFAEAEB2);
+        info.setTextSize(13);
+        info.setPadding((int) (16 * dp), 0, (int) (16 * dp), (int) (14 * dp));
+        ov.addView(info, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL));
+        View track = new View(this);
+        track.setBackgroundColor(0xFF48484A);
+        FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(-1, (int) (3 * dp), Gravity.BOTTOM);
+        tl.bottomMargin = (int) (44 * dp); tl.leftMargin = tl.rightMargin = (int) (24 * dp);
+        ov.addView(track, tl);
+        View fill = new View(this);
+        fill.setBackgroundColor(Ui.ACCENT);
+        FrameLayout.LayoutParams fl = new FrameLayout.LayoutParams(0, (int) (3 * dp), Gravity.BOTTOM);
+        fl.bottomMargin = tl.bottomMargin; fl.leftMargin = tl.leftMargin;
+        ov.addView(fill, fl);
+        TextView close = new TextView(this);
+        close.setText("✕");
+        close.setTextColor(Color.WHITE);
+        close.setTextSize(22);
+        close.setPadding((int) (18 * dp), (int) (12 * dp), (int) (18 * dp), (int) (12 * dp));
+        close.setOnClickListener(v -> closeTimelapsePlayer());
+        ov.addView(close, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
+        int n = fs.length;
+        int[] pos = {0};
+        boolean[] held = {false}, stop = {false};
+        Runnable show = () -> {
+            int k = Math.max(0, Math.min(n - 1, pos[0]));
+            Bitmap b = android.graphics.BitmapFactory.decodeFile(fs[k].getPath());
+            if (b != null) iv.setImageBitmap(b);
+            ViewGroup.LayoutParams lp = fill.getLayoutParams();
+            lp.width = Math.round((ov.getWidth() - 48 * dp) * (k + 1f) / n);
+            fill.setLayoutParams(lp);
+            info.setText(held[0] ? "Scrubbing · " + Math.round(100f * (k + 1) / n) + "%" : "Time-lapse · touch to pause · drag to scrub");
+        };
+        float[] down = new float[2];
+        ov.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN: held[0] = true; down[0] = e.getX(); down[1] = pos[0]; show.run(); break;
+                case android.view.MotionEvent.ACTION_MOVE: // the whole width = the whole recording
+                    pos[0] = Math.max(0, Math.min(n - 1, Math.round(down[1] + (e.getX() - down[0]) / Math.max(1, v.getWidth()) * n)));
+                    show.run();
+                    break;
+                default: held[0] = false; show.run();
             }
-        }).start();
+            return true;
+        });
+        shell.addView(ov, new FrameLayout.LayoutParams(-1, -1));
+        tlPlayer = ov;
+        ov.setTag(stop);
+        int step = Math.max(1, n / 600); // full replay in about 20 seconds
+        Runnable tick = new Runnable() {
+            public void run() {
+                if (stop[0]) return;
+                if (!held[0] && pos[0] < n - 1) { pos[0] = Math.min(n - 1, pos[0] + step); show.run(); }
+                ov.postDelayed(this, 33);
+            }
+        };
+        ov.post(() -> { show.run(); ov.postDelayed(tick, 33); });
+    }
+
+    private void closeTimelapsePlayer() {
+        if (tlPlayer == null) return;
+        ((boolean[]) tlPlayer.getTag())[0] = true;
+        shell.removeView(tlPlayer);
+        tlPlayer = null;
     }
 
     // ---------- Saved selections ----------

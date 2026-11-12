@@ -377,4 +377,59 @@ public class BatchFourTest extends Base {
         d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 100, MotionEvent.ACTION_UP, sx - 360, sy + 480, 0));
         assertEquals(View.GONE, ghost.getVisibility());
     }
+
+    CanvasView.Brush brushNamed(String n) { for (CanvasView.Brush b : CanvasView.BRUSHES) if (b.name.equals(n)) return b; return null; }
+
+    @Test public void each_brush_keeps_its_own_size() {
+        call(act, "setTool", CanvasView.DRAW);
+        call(act, "switchBrush", brushNamed("Ink pen"));
+        cv.size = 10;
+        call(act, "switchBrush", brushNamed("HB pencil"));
+        cv.size = 40;
+        call(act, "switchBrush", brushNamed("Ink pen"));
+        assertEquals("ink pen back to 10", 10f, cv.size, 0.01f);
+        call(act, "switchBrush", brushNamed("HB pencil"));
+        assertEquals("pencil back to 40", 40f, cv.size, 0.01f);
+        // the eraser keeps separate sizes for the same brush
+        call(act, "setTool", CanvasView.ERASE);
+        call(act, "switchBrush", brushNamed("HB pencil"));
+        cv.size = 70;
+        call(act, "setTool", CanvasView.DRAW);
+        assertEquals("HB pencil", cv.brush.name);
+        assertEquals("painting size untouched by the eraser", 40f, cv.size, 0.01f);
+        call(act, "setTool", CanvasView.ERASE);
+        assertEquals(70f, cv.size, 0.01f);
+        call(act, "setTool", CanvasView.DRAW);
+        // survives a restart
+        ctl.pause().stop(); settle(); launch();
+        call(act, "switchBrush", brushNamed("Ink pen"));
+        assertEquals(10f, cv.size, 0.01f);
+    }
+
+    @Test public void timelapse_replay_pause_and_scrub() throws Exception {
+        java.io.File dir = (java.io.File) call(act, "tlDir", get(act, "curId"));
+        dir.mkdirs();
+        for (int i = 0; i < 40; i++) {
+            Bitmap b = Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888);
+            b.eraseColor(0xFF000000 | (i * 6) * 0x10101);
+            try (java.io.FileOutputStream o = new java.io.FileOutputStream(new java.io.File(dir, String.format("%06d.jpg", i)))) { b.compress(Bitmap.CompressFormat.JPEG, 90, o); }
+        }
+        call(act, "replayTimelapse"); settle();
+        android.widget.FrameLayout ov = (android.widget.FrameLayout) get(act, "tlPlayer");
+        assertNotNull("player open", ov);
+        ShadowLooper.idleMainLooper(300, TimeUnit.MILLISECONDS);
+        TextView info = (TextView) ov.getChildAt(1);
+        t0 = android.os.SystemClock.uptimeMillis();
+        ov.dispatchTouchEvent(MotionEvent.obtain(t0, t0, MotionEvent.ACTION_DOWN, 100, 300, 0));
+        String held = info.getText().toString();
+        assertTrue("paused while held: " + held, held.startsWith("Scrubbing"));
+        ShadowLooper.idleMainLooper(500, TimeUnit.MILLISECONDS);
+        assertEquals("doesn't move while held", held, info.getText().toString());
+        ov.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 50, MotionEvent.ACTION_MOVE, 100 + ov.getWidth() / 2f, 300, 0));
+        assertNotEquals("dragging scrubs", held, info.getText().toString());
+        settle(); shot("95_timelapse_scrub");
+        ov.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 100, MotionEvent.ACTION_UP, 100 + ov.getWidth() / 2f, 300, 0));
+        act.onBackPressed();
+        assertNull("Back closes it", get(act, "tlPlayer"));
+    }
 }
