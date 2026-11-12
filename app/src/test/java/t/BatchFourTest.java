@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.Assert.*;
 
 /** New brush sets, shape/grain sources, Colour Fill, rotational symmetry, photo picker, liquify distortion,
- *  selection mask visibility, sidebar grip. */
+ *  selection mask visibility. */
 @RunWith(RobolectricTestRunner.class)
 @Config(manifest = Config.NONE, sdk = 34, qualifiers = "w841dp-h701dp-xhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -149,7 +149,7 @@ public class BatchFourTest extends Base {
         call(act, "setTool", CanvasView.DRAW);
     }
 
-    @Test public void selection_visibility_and_grip() {
+    @Test public void selection_visibility_and_sidebar() {
         // selection mask visibility pref is used
         cv.selVisibility = 0f;
         call(act, "setTool", CanvasView.SELECT);
@@ -166,25 +166,8 @@ public class BatchFourTest extends Base {
         for (int i = 0; i < 40; i++) { sa += (a.getPixel(x + i, y + i) >> 16) & 255; sb += (b.getPixel(x + i, y + i) >> 16) & 255; } // red: the stripes are blue
         assertTrue("200%: strong stripes", sb < sa);
         call(act, "setTool", CanvasView.DRAW);
-        // grip: tap = hint, drag = move, double-tap = centre
+        // no grip on the sidebar any more: the first item is the size slider
         View side = (View) get(act, "side");
-        View grip = ((android.view.ViewGroup) side).getChildAt(0);
-        View d = act.getWindow().getDecorView();
-        int[] l = new int[2]; grip.getLocationOnScreen(l);
-        float gx = l[0] + grip.getWidth() / 2f, gy = l[1] + grip.getHeight() / 2f;
-        t0 = android.os.SystemClock.uptimeMillis();
-        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0, MotionEvent.ACTION_DOWN, gx, gy, 0));
-        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 50, MotionEvent.ACTION_UP, gx, gy, 0));
-        assertTrue(hud().contains("Drag"));
-        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 1000, MotionEvent.ACTION_DOWN, gx, gy, 0));
-        for (int i = 1; i <= 5; i++) d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 1000 + i * 10, MotionEvent.ACTION_MOVE, gx, gy + i * 20, 0));
-        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 1100, MotionEvent.ACTION_UP, gx, gy + 100, 0));
-        assertEquals(100f, side.getTranslationY(), 1f);
-        grip.getLocationOnScreen(l); gx = l[0] + grip.getWidth() / 2f; gy = l[1] + grip.getHeight() / 2f;
-        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 2000, MotionEvent.ACTION_DOWN, gx, gy, 0));
-        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 2050, MotionEvent.ACTION_UP, gx, gy, 0));
-        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 2150, MotionEvent.ACTION_DOWN, gx, gy, 0));
-        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 2200, MotionEvent.ACTION_UP, gx, gy, 0));
-        assertEquals("double-tap centres", 0f, side.getTranslationY(), 0.5f);
+        assertSame(get(act, "sizeS"), ((android.view.ViewGroup) side).getChildAt(0));
     }
 }

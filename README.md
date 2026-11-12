@@ -63,7 +63,6 @@ Layout matches Procreate so you can switch between the two easily:
 - **Text**: Actions → Add → Add text. Font, size, bold, alignment; edit later from layer options.
 - **Animation**: tap a frame for hold duration, duplicate, delete; Loop / Ping-Pong / One shot.
 - **Prefs**: interface size, brush cursor, global pressure curve and smoothing, rapid-undo delay.
-  Drag the sidebar's ⋯ grip to move it up or down.
 - **Transform**: Snapping (to canvas centre/edges) and Smooth/Nearest interpolation.
 - **Adjustments**: Layer or Pencil mode (Pencil = paint the adjustment with the brush).
 - **Liquify**: Crystals and Edge modes, Momentum slider.
@@ -98,7 +97,6 @@ Layout matches Procreate so you can switch between the two easily:
 - **Rotational symmetry**: Drawing Guide → Symmetry → switch between mirrored and rotated copies.
 - **Photo**: Gallery → Photo (new drawing) and Actions → Add → Insert a photo use Android's photo picker.
 - **Liquify Distortion** slider; **Selection mask visibility** in Prefs.
-- **Sidebar**: drag the ⋯ grip to move the sidebar up or down; tap it for a hint; double-tap to centre it.
 
 ### Gallery
 Inkwell opens in the Gallery like Procreate. ＋ New (size presets), Import (any supported file), tap to open,

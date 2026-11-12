@@ -156,35 +156,6 @@ public class MainActivity extends Activity {
         sbg.setCornerRadius(12 * dp);
         side.setBackground(sbg);
         side.setPadding(0, (int) (6 * dp), 0, (int) (6 * dp));
-        TextView grip = new TextView(this); // drag to move the sidebar up or down; tap for a hint; double-tap to centre
-        grip.setText("⋯");
-        grip.setTextSize(20);
-        grip.setTextColor(0xFFAEAEB2);
-        grip.setGravity(Gravity.CENTER);
-        grip.setContentDescription("Drag to move the sidebar");
-        float[] gy = new float[3]; // down y, start translation, last tap time
-        grip.setOnTouchListener((v, e) -> {
-            switch (e.getActionMasked()) {
-                case android.view.MotionEvent.ACTION_DOWN:
-                    gy[0] = e.getRawY(); gy[1] = side.getTranslationY();
-                    v.getParent().requestDisallowInterceptTouchEvent(true);
-                    break;
-                case android.view.MotionEvent.ACTION_MOVE: {
-                    float lim = Math.max(0, stage.getHeight() / 2f - side.getHeight() / 2f);
-                    side.setTranslationY(Math.max(-lim, Math.min(lim, gy[1] + e.getRawY() - gy[0])));
-                    break;
-                }
-                case android.view.MotionEvent.ACTION_UP:
-                    if (Math.abs(e.getRawY() - gy[0]) < 8 * dp) { // a tap
-                        if (gy[2] > 0 && e.getEventTime() - gy[2] < 350) { side.setTranslationY(0); hud("Sidebar centred"); gy[2] = -1; }
-                        else { hud("Drag ⋯ to move the sidebar up or down · double-tap to centre"); gy[2] = Math.max(1, e.getEventTime()); }
-                    }
-                    prefs.edit().putFloat("sideY", side.getTranslationY()).apply();
-                    break;
-            }
-            return true;
-        });
-        side.addView(grip, new LinearLayout.LayoutParams(-1, (int) (34 * dp)));
         sizeS = new Ui.VSlider(this, (float) Math.sqrt((canvas.size - 1) / 149f));
         sizeS.listener = (v, done) -> { // finer control at small sizes
             canvas.size = 1 + 149 * v * v;
@@ -351,11 +322,6 @@ public class MainActivity extends Activity {
         canvas.globalCurve = prefs.getFloat("gCurve", 1f);
         canvas.globalSmooth = prefs.getFloat("gSmooth", 0f);
         canvas.undoHoldDelay = prefs.getInt("undoDelay", 600);
-        side.setTranslationY(prefs.getFloat("sideY", 0));
-        side.addOnLayoutChangeListener((v, l1, t1, r1, b1, l2, t2, r2, b2) -> { // folding/unfolding: keep it on screen
-            float lim = Math.max(0, stage.getHeight() / 2f - side.getHeight() / 2f);
-            if (Math.abs(side.getTranslationY()) > lim) side.setTranslationY(Math.signum(side.getTranslationY()) * lim);
-        });
         loadToolPrefs();
         applyTool(canvas.tool);
         gdir = new File(getFilesDir(), "gallery");
