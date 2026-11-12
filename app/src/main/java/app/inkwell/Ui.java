@@ -92,12 +92,8 @@ final class Ui {
                     path.quadTo(20, 11, 20, 16); path.quadTo(20, 20, 15, 20);
                     c.drawPath(path, p);
                     break;
-                case PICK: // eyedropper
-                    c.drawLine(5, 19, 14, 10, p);
-                    p.setStrokeWidth(3.2f);
-                    c.drawLine(14, 10, 18, 6, p);
-                    p.setStrokeWidth(1.8f);
-                    c.drawLine(12, 7, 17, 12, p);
+                case PICK: // the sidebar "square" button (eyedropper or QuickMenu, like Procreate's modify button)
+                    c.drawRoundRect(new android.graphics.RectF(6.5f, 6.5f, 17.5f, 17.5f), 2.5f, 2.5f, p);
                     break;
                 case ADJUST: // magic wand
                     c.drawLine(4, 20, 15, 9, p);
