@@ -40,7 +40,7 @@ public class FeatureTest extends Base {
         for (int i = 0; i < CanvasView.BRUSHES.size(); i++) {
             cv.brush = CanvasView.BRUSHES.get(i);
             long b0 = inkSum(L());
-            float y = H * (0.1f + 0.07f * i);
+            float y = H * (0.08f + 0.84f * i / CanvasView.BRUSHES.size()); // rows fit any number of brushes
             stroke(new float[][]{{W * .2f, y}, {W * .4f, y + 5}, {W * .6f, y}}, MotionEvent.TOOL_TYPE_STYLUS, 0.7f);
             assertTrue("brush " + cv.brush.name + " paints", inkSum(L()) > b0);
         }

@@ -193,6 +193,32 @@ public class CanvasView extends View {
             return b;
         }
 
+        /** Sets one Brush Studio value (for building presets). */
+        Brush p(String k, float v) { put(k, v); return this; }
+
+        /** Gives the brush a generated tip image: 1 = bristles (oil), 2 = sparse bristles (dry), 3 = sponge. */
+        Brush tipKind(int kind) {
+            int n = kind == 3 ? 128 : 96;
+            float[] f = new float[n * n];
+            java.util.Random r = new java.util.Random(kind * 977L);
+            int count = kind == 1 ? 70 : kind == 2 ? 28 : 55;
+            for (int i = 0; i < count; i++) {
+                double a = r.nextDouble() * Math.PI * 2, d = Math.sqrt(r.nextDouble()) * 0.88;
+                float cx = n / 2f + (float) (Math.cos(a) * d * n / 2), cy = n / 2f + (float) (Math.sin(a) * d * n / 2);
+                float rad = kind == 3 ? 3 + r.nextFloat() * 9 : 2 + r.nextFloat() * (kind == 1 ? 4 : 3);
+                float val = 0.45f + 0.55f * r.nextFloat();
+                for (int y = Math.max(0, (int) (cy - rad - 1)); y < Math.min(n, (int) (cy + rad + 2)); y++)
+                    for (int x = Math.max(0, (int) (cx - rad - 1)); x < Math.min(n, (int) (cx + rad + 2)); x++) {
+                        float q = 1 - (float) Math.hypot(x + 0.5f - cx, y + 0.5f - cy) / rad;
+                        if (q > 0) f[y * n + x] = Math.max(f[y * n + x], val * Math.min(1, q * 2.5f));
+                    }
+            }
+            byte[] t = new byte[n * n];
+            for (int i = 0; i < t.length; i++) t[i] = (byte) Math.round(Math.min(1, f[i]) * 255);
+            setTip(t, n, n);
+            return this;
+        }
+
         Brush with(String set, float streamline, float taperStart, float taperEnd) {
             this.set = set; this.streamline = streamline; this.taperStart = taperStart; this.taperEnd = taperEnd;
             builtin = true;
@@ -241,7 +267,24 @@ public class CanvasView extends View {
         new Brush("Charcoal",       0.6f,  0.2f,  1f,   0.4f, 0.85f, 0.1f).with("Sketching", 0f, 0f, 0f),
         new Brush("Soft shading",   0.5f,  0.05f, 0.8f, 0f,   0f,    0.1f).with("Airbrushing", 0f, 0f, 0f),
         new Brush("Airbrush",       1f,    0.02f, 0.6f, 0f,   0f,    0.1f).with("Airbrushing", 0f, 0f, 0f),
-        new Brush("Hard round",     1f,    0.1f,  1f,   0.9f, 0f,    0.08f).with("Airbrushing", 0f, 0f, 0f)
+        new Brush("Hard round",     1f,    0.1f,  1f,   0.9f, 0f,    0.08f).with("Airbrushing", 0f, 0f, 0f),
+        // Painting set
+        new Brush("Round brush",    0.4f,  0.3f,  0.9f, 0.5f, 0f,    0.05f).with("Painting", 0.2f, 0.2f, 0.3f),
+        new Brush("Flat brush",     0.6f,  0.5f,  1f,   0.8f, 0f,    0.04f).with("Painting", 0.2f, 0f, 0.2f)
+                .p("roundness", 0.25f).p("angle", 90).p("follow", 1),
+        new Brush("Gouache",        0.5f,  0.7f,  1f,   0.75f, 0.25f, 0.05f).with("Painting", 0.15f, 0.1f, 0.15f)
+                .p("grainScale", 2f).p("jitterOpacity", 0.1f),
+        new Brush("Oil paint",      0.6f,  0.4f,  1f,   0.8f, 0.2f,  0.03f).with("Painting", 0.15f, 0f, 0.25f)
+                .p("follow", 1).tipKind(1),
+        new Brush("Dry brush",      0.7f,  0.3f,  1f,   0.8f, 0.6f,  0.05f).with("Painting", 0.1f, 0f, 0.2f)
+                .p("grainScale", 1.5f).p("follow", 1).tipKind(2),
+        new Brush("Watercolour",    0.6f,  0.2f,  0.35f, 0f,  0.35f, 0.06f).with("Painting", 0.25f, 0.1f, 0.2f)
+                .p("grainScale", 3f).p("jitterSize", 0.1f),
+        new Brush("Palette knife",  0.8f,  1f,    1f,   0.95f, 0f,   0.03f).with("Painting", 0.3f, 0f, 0f)
+                .p("roundness", 0.12f).p("angle", 30),
+        new Brush("Sponge",         0.8f,  0.5f,  0.9f, 0.6f, 0.3f,  0.15f).with("Painting", 0f, 0f, 0f)
+                .p("scatter", 0.25f).p("jitterSize", 0.3f).p("jitterOpacity", 0.3f).tipKind(3),
+        new Brush("Blender",        0.6f,  0.2f,  0.6f, 0.2f, 0f,    0.06f).with("Painting", 0.3f, 0.1f, 0.1f)
     ));
 
     /** 128x128 tileable paper grain, 0..255. */
@@ -265,7 +308,7 @@ public class CanvasView extends View {
     public static final java.util.HashMap<String, float[]> DEFAULTS = new java.util.HashMap<>();
     static { for (Brush b : BRUSHES) DEFAULTS.put(b.name, b.values()); }
 
-    public static final String[] SETS = {"Inking", "Sketching", "Airbrushing", "Imported"};
+    public static final String[] SETS = {"Inking", "Sketching", "Painting", "Airbrushing", "Imported"};
 
     public Brush brush = BRUSHES.get(0);
     public float opacity = 1f;

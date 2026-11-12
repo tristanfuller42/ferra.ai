@@ -88,6 +88,8 @@ public class UiTest extends Base {
         }
         call(act, "adjustMenu", cv); settle(); popShot("41_adjustments");
         call(act, "pickBrush"); settle(); popShot("42_brush_library");
+        set(act, "libSet", "Painting");
+        call(act, "pickBrush"); settle(); popShot("42b_painting_set");
         call(act, "pickGrey"); settle(); popShot("43_colour");
         cv.flipView(true);
         shot("44_after_actions");

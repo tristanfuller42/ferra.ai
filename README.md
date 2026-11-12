@@ -45,7 +45,7 @@ Layout matches Procreate so you can switch between the two easily:
 Inkwell opens in the Gallery like Procreate. ＋ New (size presets), Import (any supported file), tap to open,
 long-press to rename, duplicate or delete. Drawings save automatically.
 
-- **Brush Library**: tap the active brush/smudge/eraser button. Brush sets on the left (Inking, Sketching,
+- **Brush Library**: tap the active brush/smudge/eraser button. Brush sets on the left (Inking, Sketching, Painting,
   Airbrushing, Imported), previews on the right. ＋ makes a new brush; long-press a brush to duplicate, reset or delete.
 - **Brush Studio**: tap the selected brush again. Settings per brush, saved: Stroke path (spacing, size/opacity jitter,
   scatter), Stabilization (StreamLine smoothing, stabilization), Taper (start/end), Shape (roundness, angle, rotate
