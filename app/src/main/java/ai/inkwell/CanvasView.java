@@ -28,8 +28,8 @@ import java.util.zip.Inflater;
  * of the changed rectangle, so 100 steps fit in little memory.
  */
 public class CanvasView extends View {
-    public static final int MAX_UNDO = 100;
-    private static final long MAX_HISTORY_BYTES = 96L << 20;
+    public static final int MAX_UNDO = 250;
+    private static final long MAX_HISTORY_BYTES = 128L << 20;
     public static final int DRAW = 0, ERASE = 1, MOVE = 2, SMUDGE = 3, SELECT = 4, CLONE = 5, LIQUIFY = 6, ADJUST = 7;
 
     public static final String[] BLEND_NAMES = {"Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten",
@@ -47,10 +47,25 @@ public class CanvasView extends View {
         public boolean visible = true, dirty = true, alphaLock, clip, editMask, maskOn = true;
         public int blend, group;          // group id, 0 = none
         public Layer mask;                // white = show, black = hide
+        public boolean locked, reference; // locked: no changes; reference: fills/auto-select read this layer
+        public TextInfo text;             // set while the layer is editable text
+        public int hold = 1;              // animation: how many frames this frame is shown
         public Bitmap maskThumb;
         public Layer(Bitmap b, String n) { bmp = b; name = n; }
         void copyProps(Layer o) {
             opacity = o.opacity; visible = o.visible; alphaLock = o.alphaLock; clip = o.clip; blend = o.blend; group = o.group;
+            locked = o.locked; hold = o.hold;
+        }
+    }
+
+    /** Editable text layer settings. */
+    public static final class TextInfo {
+        public String text, font = "sans-serif";
+        public float size;
+        public boolean bold;
+        public int align, grey;           // align: 0 left, 1 centre, 2 right
+        public TextInfo(String t, float size, boolean bold, int align, String font, int grey) {
+            text = t; this.size = size; this.bold = bold; this.align = align; this.font = font; this.grey = grey;
         }
     }
 
@@ -61,12 +76,15 @@ public class CanvasView extends View {
         public Group(String n) { name = n; }
     }
 
-    interface Edit { void undo(); void redo(); long bytes(); }
+    interface Edit { void undo(); void redo(); long bytes(); default String name() { return "Change"; } default void name(String n) { } }
 
     /** Swaps a rectangle of pixels between the layer and stored compressed data. */
     private final class PixelEdit implements Edit {
         final Layer l; final Rect r; byte[] data;
+        String nm = "Change";
         PixelEdit(Layer l, Rect r) { this.l = l; this.r = r; data = pack(l.bmp, r); }
+        public String name() { return nm; }
+        public void name(String n) { nm = n; }
         void swap() { byte[] now = pack(l.bmp, r); unpack(l.bmp, r, data); data = now; l.dirty = true; }
         public void undo() { swap(); }
         public void redo() { swap(); }
@@ -76,7 +94,10 @@ public class CanvasView extends View {
     /** Structural change (add/delete/reorder layer, opacity, ...). */
     private static final class Op implements Edit {
         final Runnable u, r; final long b;
+        String nm = "Change";
         Op(Runnable u, Runnable r, long b) { this.u = u; this.r = r; this.b = b; }
+        public String name() { return nm; }
+        public void name(String n) { nm = n; }
         public void undo() { u.run(); }
         public void redo() { r.run(); }
         public long bytes() { return b; }
@@ -109,6 +130,7 @@ public class CanvasView extends View {
     public int paperColor() { return bgVisible ? Color.rgb(bgGrey, bgGrey, bgGrey) : Color.WHITE; }
 
     public void setBackground(int grey, boolean visible) {
+        named("Background colour");
         int og = bgGrey; boolean ov = bgVisible;
         if (og == grey && ov == visible) return;
         apply(new Op(() -> { bgGrey = og; bgVisible = ov; }, () -> { bgGrey = grey; bgVisible = visible; }, 64));
@@ -325,6 +347,7 @@ public class CanvasView extends View {
 
     // Transform (Move tool)
     private Bitmap floatBmp;
+    private boolean moveBlocked;
     private PixelEdit moveEdit;
     private byte[] selBeforeMove;
     private final Matrix poly = new Matrix();
@@ -475,7 +498,13 @@ public class CanvasView extends View {
         if (onChange != null) onChange.run();
     }
 
+    /** Name for the next undo step (shown as "Undo: name"). */
+    private String pendingName;
+    public java.util.function.Consumer<String> onHistory;
+    private void named(String n) { pendingName = n; }
+
     private void push(Edit e) {
+        if (pendingName != null) { e.name(pendingName); pendingName = null; }
         if (onCommitted != null) post(onCommitted);
         undoList.add(e);
         redoList.clear();
@@ -665,6 +694,7 @@ public class CanvasView extends View {
 
     /** Draws the floating (being transformed) content with uniform/freeform/distort/warp. */
     private void drawFloat(Canvas c, Paint p) {
+        if (!smoothResample) { p = new Paint(p); p.setFilterBitmap(false); p.setAntiAlias(false); }
         c.save();
         if (xform == 3) {
             c.concat(layerMatrix());
@@ -763,8 +793,65 @@ public class CanvasView extends View {
         return hatchShader;
     }
 
+    public java.util.function.BiConsumer<Float, Float> onViewChanged; // zoom %, rotation degrees
+
+    private float fitScale() { return Math.min((float) getWidth() / docW, (float) getHeight() / docH) * 0.96f; }
+
+    // Transform snapping: centre/edges of the content lock to the canvas centre/edges
+    public boolean snapping = true, smoothResample = true;
+    private float snapX = Float.NaN, snapY = Float.NaN; // screen lines to show
+    private float snapOffX, snapOffY;                    // current snap correction (kept separate from the finger)
+
+    private void snapMove() {
+        float[] q = handlePoints(); // corners on screen
+        float minX = Math.min(Math.min(q[0], q[2]), Math.min(q[4], q[6])), maxX = Math.max(Math.max(q[0], q[2]), Math.max(q[4], q[6]));
+        float minY = Math.min(Math.min(q[1], q[3]), Math.min(q[5], q[7])), maxY = Math.max(Math.max(q[1], q[3]), Math.max(q[5], q[7]));
+        float[] c = {0, 0, docW / 2f, docH / 2f, docW, docH};
+        view.mapPoints(c);
+        float tol = 10 * getResources().getDisplayMetrics().density;
+        snapX = snapY = Float.NaN;
+        float[][] xs = {{(minX + maxX) / 2, c[2]}, {minX, c[0]}, {maxX, c[4]}};
+        for (float[] k : xs) if (Math.abs(k[0] - k[1]) < tol) { snapOffX = k[1] - k[0]; moveT.postTranslate(snapOffX, 0); snapX = k[1]; break; }
+        float[][] ys = {{(minY + maxY) / 2, c[3]}, {minY, c[1]}, {maxY, c[5]}};
+        for (float[] k : ys) if (Math.abs(k[0] - k[1]) < tol) { snapOffY = k[1] - k[0]; moveT.postTranslate(0, snapOffY); snapY = k[1]; break; }
+    }
+
+    private void drawSnapLines(Canvas c) {
+        if (!moving || (Float.isNaN(snapX) && Float.isNaN(snapY))) return;
+        Paint p = new Paint();
+        p.setColor(0xFFFFB020);
+        p.setStrokeWidth(2);
+        if (!Float.isNaN(snapX)) c.drawLine(snapX, 0, snapX, getHeight(), p);
+        if (!Float.isNaN(snapY)) c.drawLine(0, snapY, getWidth(), snapY, p);
+    }
+
     /** Called when a new touch starts; return true to swallow it (e.g. it just closed a menu). */
     public java.util.function.BooleanSupplier onTouchStart;
+    public boolean showCursor;                   // Prefs: brush outline under the pen
+    private float curSX = -1, curSY = -1;
+    private boolean cursorOn;
+
+    @Override
+    public boolean onHoverEvent(MotionEvent e) {
+        if (!showCursor) return super.onHoverEvent(e);
+        curSX = e.getX(); curSY = e.getY();
+        cursorOn = e.getActionMasked() != MotionEvent.ACTION_HOVER_EXIT;
+        invalidate();
+        return true;
+    }
+
+    private void drawCursor(Canvas c) {
+        if (!showCursor || !cursorOn || !(tool == DRAW || tool == ERASE || tool == SMUDGE || tool == CLONE)) return;
+        float r = Math.max(2f, size * brush.sizeScale / 2f * view.mapRadius(1f));
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(3);
+        p.setColor(0x99000000);
+        c.drawCircle(curSX, curSY, r, p);
+        p.setStrokeWidth(1.2f);
+        p.setColor(0xEEFFFFFF);
+        c.drawCircle(curSX, curSY, r, p);
+    }
     private boolean swallow;
 
     @Override
@@ -818,7 +905,13 @@ public class CanvasView extends View {
             o.setShader(hatch(tool == SELECT, sc));
             c.drawBitmap(selOverlay, 0, 0, o);
         }
+        drawAnts(c, sc);
         if (selPath != null) {
+            if (polyOpen) { // corners of a tap-polygon
+                Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
+                dot.setColor(0xFF3D9BFF);
+                c.drawCircle(polyX0, polyY0, 8 / sc, dot);
+            }
             g.setColor(0xFF3D9BFF);
             g.setStrokeWidth(2f / sc);
             c.drawPath(selPath, g);
@@ -834,6 +927,9 @@ public class CanvasView extends View {
         }
         c.restore();
         if (guide >= 7) drawPerspectiveHandles(c);
+        drawShapeHandles(c);
+        drawCursor(c);
+        drawSnapLines(c);
         if (onFrame != null) onFrame.run();
         if (tool == MOVE && moving) { // transform box + handles (screen space)
             float[] q = handlePoints();
@@ -882,10 +978,11 @@ public class CanvasView extends View {
         pickAt(downSX, downSY);
     };
 
-    /** Draw and hold: QuickShape (straight line, or ellipse if the stroke closes on itself). */
+    /** Draw and hold: QuickShape (line, ellipse/circle or rectangle). */
     private final Runnable shapeHold = () -> {
         if (!stroking || shaping || sn < 6 || pathLen < 12) return;
         shaping = true;
+        shapeConstrain = false;
         float sum = 0, x0 = Float.MAX_VALUE, y0 = Float.MAX_VALUE, x1 = -Float.MAX_VALUE, y1 = -Float.MAX_VALUE;
         for (int k = 0; k < sn; k += 3) {
             x0 = Math.min(x0, spts[k]); x1 = Math.max(x1, spts[k]);
@@ -896,8 +993,24 @@ public class CanvasView extends View {
         float gap = (float) Math.hypot(curX - spts[0], curY - spts[1]);
         shapeClosed = gap < pathLen * 0.15f && (x1 - x0) > 4 && (y1 - y0) > 4;
         ecx = (x0 + x1) / 2; ecy = (y0 + y1) / 2; erx = (x1 - x0) / 2; ery = (y1 - y0) / 2;
+        shapeKind = 0;
+        if (shapeClosed) { // ellipse or rectangle: whichever the drawn points fit better
+            float ellErr = 0, rectErr = 0;
+            int n = 0;
+            for (int k = 0; k < sn; k += 3, n++) {
+                float nx = (spts[k] - ecx) / Math.max(1, erx), ny = (spts[k + 1] - ecy) / Math.max(1, ery);
+                ellErr += Math.abs((float) Math.sqrt(nx * nx + ny * ny) - 1);
+                float de = Math.min(Math.min(spts[k] - x0, x1 - spts[k]), Math.min(spts[k + 1] - y0, y1 - spts[k + 1]));
+                rectErr += de / Math.max(1, Math.min(erx, ery));
+            }
+            shapeKind = rectErr < ellErr * 0.8f ? 2 : 1;
+            quad = new float[]{x0, y0, x1, y0, x1, y1, x0, y1};
+        }
+        lineX0 = spts[0]; lineY0 = spts[1];
         renderShape();
     };
+
+    public int undoHoldDelay = 600; // Prefs: how long to hold two fingers before rapid undo
 
     /** Two-finger hold: keep undoing. */
     private final Runnable undoHold = new Runnable() {
@@ -932,20 +1045,103 @@ public class CanvasView extends View {
         strokeDirty.setEmpty();
     }
 
+    // QuickShape state: 0 line, 1 ellipse, 2 rectangle (quad corners, editable)
+    private int shapeKind;
+    private boolean shapeConstrain, shapeEdit, wasShape;
+    private float lineX0, lineY0, lineX1, lineY1;
+    private float[] quad = new float[8];
+    private int shapeDrag = -1;
+
     private void renderShape() {
         restoreStroke();
-        if (shapeClosed) {
-            startAt(ecx + erx, ecy, shapeP);
+        if (shapeKind == 1) {
+            float rx = erx, ry = ery;
+            if (shapeConstrain) { rx = ry = Math.max(erx, ery); erx = ery = rx; } // perfect circle
+            startAt(ecx + rx, ecy, shapeP);
             int n = 120;
             for (int k = 1; k <= n; k++) {
                 double t = 2 * Math.PI * k / n;
-                segmentTo(ecx + erx * (float) Math.cos(t), ecy + ery * (float) Math.sin(t), shapeP);
+                segmentTo(ecx + rx * (float) Math.cos(t), ecy + ry * (float) Math.sin(t), shapeP);
             }
+        } else if (shapeKind == 2) {
+            if (shapeConstrain && !shapeEdit) { // perfect square
+                float side = Math.max(quad[2] - quad[0], quad[5] - quad[1]);
+                quad = new float[]{quad[0], quad[1], quad[0] + side, quad[1], quad[0] + side, quad[1] + side, quad[0], quad[1] + side};
+            }
+            startAt(quad[0], quad[1], shapeP);
+            for (int k = 1; k <= 4; k++) segmentTo(quad[(k % 4) * 2], quad[(k % 4) * 2 + 1], shapeP);
         } else {
-            startAt(spts[0], spts[1], shapeP);
-            segmentTo(curX, curY, shapeP);
+            if (!shapeEdit) { lineX1 = curX; lineY1 = curY; }
+            if (shapeConstrain) { // snap the angle to 15° steps
+                float dx = lineX1 - lineX0, dy = lineY1 - lineY0, len = (float) Math.hypot(dx, dy);
+                double a = Math.round(Math.atan2(dy, dx) / (Math.PI / 12)) * (Math.PI / 12);
+                lineX1 = lineX0 + (float) Math.cos(a) * len; lineY1 = lineY0 + (float) Math.sin(a) * len;
+            }
+            startAt(lineX0, lineY0, shapeP);
+            segmentTo(lineX1, lineY1, shapeP);
         }
         flush();
+    }
+
+    /** Handle positions (canvas coords) for editing the shape after lifting the pen. */
+    private float[] shapeHandles() {
+        if (shapeKind == 0) return new float[]{lineX0, lineY0, lineX1, lineY1};
+        if (shapeKind == 1) return new float[]{ecx + erx, ecy, ecx - erx, ecy, ecx, ecy + ery, ecx, ecy - ery};
+        return quad.clone();
+    }
+
+    private boolean shapeHandleTouch(MotionEvent e, int action) {
+        view.invert(inverse);
+        float[] f = {e.getX(), e.getY()};
+        inverse.mapPoints(f);
+        if (action == MotionEvent.ACTION_DOWN) {
+            float[] h = shapeHandles();
+            float best = 28 * getResources().getDisplayMetrics().density / view.mapRadius(1f);
+            shapeDrag = -1;
+            for (int k = 0; k < h.length / 2; k++) {
+                float d = (float) Math.hypot(f[0] - h[k * 2], f[1] - h[k * 2 + 1]);
+                if (d < best) { best = d; shapeDrag = k; }
+            }
+            return shapeDrag >= 0;
+        }
+        if (action == MotionEvent.ACTION_MOVE && shapeDrag >= 0) {
+            if (shapeKind == 0) { if (shapeDrag == 0) { lineX0 = f[0]; lineY0 = f[1]; } else { lineX1 = f[0]; lineY1 = f[1]; } }
+            else if (shapeKind == 1) { if (shapeDrag < 2) erx = Math.max(2, Math.abs(f[0] - ecx)); else ery = Math.max(2, Math.abs(f[1] - ecy)); }
+            else { quad[shapeDrag * 2] = f[0]; quad[shapeDrag * 2 + 1] = f[1]; }
+            renderShape();
+            return true;
+        }
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) shapeDrag = -1;
+        return true;
+    }
+
+    /** Keeps the edited shape as a normal stroke. */
+    public void finishShapeEdit() {
+        if (!shapeEdit) return;
+        shapeEdit = false;
+        shapeDrag = -1;
+        wasShape = true;
+        commitStroke();
+        wasShape = false;
+        shaping = false;
+        invalidate();
+    }
+
+    public boolean editingShape() { return shapeEdit; }
+
+    private void drawShapeHandles(Canvas c) {
+        if (!shapeEdit) return;
+        float[] h = shapeHandles();
+        Matrix m = new Matrix(view);
+        m.mapPoints(h);
+        float r = 9 * getResources().getDisplayMetrics().density;
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        for (int k = 0; k < h.length / 2; k++) {
+            p.setStyle(Paint.Style.FILL); p.setColor(Color.WHITE);
+            c.drawCircle(h[k * 2], h[k * 2 + 1], r, p);
+            p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(2); p.setColor(0xFF3D9BFF);
+            c.drawCircle(h[k * 2], h[k * 2 + 1], r, p);
+        }
     }
 
     /** Sets the ink grey to the composited colour under a screen point. */
@@ -977,6 +1173,28 @@ public class CanvasView extends View {
         int type = e.getToolType(0);
         boolean isPen = type == MotionEvent.TOOL_TYPE_STYLUS || type == MotionEvent.TOOL_TYPE_ERASER;
         if (isPen) stylusSeen = true;
+        if (showCursor) { // outline follows the pen while drawing
+            curSX = e.getX(); curSY = e.getY();
+            cursorOn = action != MotionEvent.ACTION_UP && action != MotionEvent.ACTION_CANCEL || isPen;
+        }
+        if (shapeEdit && action == MotionEvent.ACTION_DOWN && e.getPointerCount() == 1 && shapeHandleTouch(e, action)) return true;
+        if (shapeEdit && shapeDrag >= 0) return shapeHandleTouch(e, action);
+        if (shapeEdit && action == MotionEvent.ACTION_DOWN) finishShapeEdit(); // touch elsewhere: keep the shape and carry on
+        if (shaping && stroking && e.getPointerCount() >= 2) { // second finger while QuickShape: constrain
+            shapeConstrain = true;
+            view.invert(inverse);
+            pt[0] = e.getX(0); pt[1] = e.getY(0); inverse.mapPoints(pt);
+            curX = pt[0]; curY = pt[1];
+            renderShape();
+            return true;
+        }
+        if (fillMode && action == MotionEvent.ACTION_DOWN && e.getPointerCount() == 1 && (tool == DRAW || tool == ERASE)) {
+            view.invert(inverse);
+            pt[0] = e.getX(); pt[1] = e.getY(); inverse.mapPoints(pt);
+            colorDropDoc((int) pt[0], (int) pt[1], fillThreshold);
+            return true;
+        }
+        if (fillMode && action != MotionEvent.ACTION_DOWN && !gesture && e.getPointerCount() == 1 && (tool == DRAW || tool == ERASE)) return true;
 
         if (pickNext && action == MotionEvent.ACTION_DOWN) { // eyedropper button armed
             pickNext = false;
@@ -996,9 +1214,10 @@ public class CanvasView extends View {
             if (xform > 0 && e.getPointerCount() == 1 && !gesture && handleDrag(e, action)) return true;
             return handleGesture(e, action, moveT);
         }
+        if ((e.getPointerCount() >= 2 || gesture) && shapeEdit) finishShapeEdit();
         if (e.getPointerCount() >= 2 || gesture) return handleGesture(e, action, view);
         if (tool == SELECT) return selectTouch(e, action);
-        if (tool == ADJUST) return adjustTouch(e, action);
+        if (tool == ADJUST && !adjPencil) return adjustTouch(e, action);
         if (stylusSeen && !fingerPaint && type == MotionEvent.TOOL_TYPE_FINGER) return handleGesture(e, action, view);
         if (tool == LIQUIFY) return liquifyTouch(e, action);
         if (tool == CLONE && action == MotionEvent.ACTION_DOWN && (!cloneSet || cloneArmed)) {
@@ -1014,10 +1233,13 @@ public class CanvasView extends View {
         view.invert(inverse);
         switch (action) {
             case MotionEvent.ACTION_DOWN:
+                if (isLocked()) { stroking = false; return true; }
                 erasing = tool == ERASE || type == MotionEvent.TOOL_TYPE_ERASER
                         || (e.getButtonState() & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0;
                 smudging = tool == SMUDGE && !erasing;
                 cloning = tool == CLONE && !erasing;
+                adjPaint = tool == ADJUST && adjPencil && adjOut != null;
+                if (adjPaint) { erasing = false; smudging = false; }
                 penInput = isPen;
                 stroking = true;
                 picking = shaping = false;
@@ -1068,7 +1290,8 @@ public class CanvasView extends View {
                 removeCallbacks(shapeHold);
                 if (picking) picking = false;
                 else if (stroking) {
-                    if (!shaping) finishSmoothing(e);
+                    if (shaping) { shapeEdit = true; shapeConstrain = false; invalidate(); break; } // adjust with handles, tap elsewhere to keep
+                    finishSmoothing(e);
                     commitStroke();
                 }
                 shaping = false;
@@ -1254,6 +1477,7 @@ public class CanvasView extends View {
 
     /** Records a perspective change (points / number of points) as an undo step. */
     public void guideEdit(float[] beforeVp, int beforeGuide) {
+        named("Drawing guide");
         float[] b = beforeVp.clone(), a = vp.clone();
         int ga = guide;
         push(new Op(() -> { vp = b.clone(); guide = beforeGuide; invalidate(); },
@@ -1286,10 +1510,13 @@ public class CanvasView extends View {
     // Each stroke stamps round "dabs" into a coverage mask (max, so overlaps don't darken),
     // then the mask is composited onto the layer's pre-stroke pixels with the ink grey.
 
+    public float globalCurve = 1f, globalSmooth = 0f; // Prefs: pressure and smoothing for every brush
+
     private float pres(float p) {
         if (!penInput) return 1f;
         float q = Math.max(0f, Math.min(p, 1f));
-        return brush.curve == 1f ? q : (float) Math.pow(q, brush.curve); // pressure curve
+        float c = brush.curve * globalCurve;
+        return c == 1f ? q : (float) Math.pow(q, c); // pressure curve
     }
 
     private float diameter(float p) {
@@ -1323,7 +1550,8 @@ public class CanvasView extends View {
             for (int i = 0; i < stabN; i++) { sx += stabX[i]; sy += stabY[i]; }
             x = sx / stabN; y = sy / stabN;
         }
-        float k = 1 - 0.92f * b.streamline; // streamline: the line follows the pen with a pull
+        float sl = 1 - (1 - b.streamline) * (1 - globalSmooth);
+        float k = 1 - 0.92f * sl; // streamline: the line follows the pen with a pull
         smoX += (x - smoX) * k;
         smoY += (y - smoY) * k;
         pt[0] = smoX; pt[1] = smoY;
@@ -1342,7 +1570,7 @@ public class CanvasView extends View {
 
     /** At pen lift: let the smoothed line catch up to where the pen ended, then apply the end taper. */
     private void finishSmoothing(MotionEvent e) {
-        if (recN >= 3 && (brush.streamline > 0 || brush.stabilize > 0)) {
+        if (recN >= 3 && (brush.streamline > 0 || brush.stabilize > 0 || globalSmooth > 0)) {
             float tx = lastRawX, ty = lastRawY;
             float sx = rec[recN - 3], sy = rec[recN - 2];
             int steps = 6;
@@ -1510,7 +1738,7 @@ public class CanvasView extends View {
         int w = r.width(), h = r.height();
         if (buf.length < w * h) buf = new int[w * h];
         backup.getPixels(buf, 0, w, r.left, r.top, w, h);
-        int[] cl = cloning ? cloneBlock(r) : null;
+        int[] cl = adjPaint ? adjBlock(r) : cloning ? cloneBlock(r) : null;
         boolean lock = tgt().alphaLock;
         byte[] sm = sel;
         int ink = grey;
@@ -1632,6 +1860,8 @@ public class CanvasView extends View {
         l.bmp = backup;
         PixelEdit pe = new PixelEdit(l, r);
         l.bmp = real;
+        pe.name(adjPaint ? adjName : erasing ? "Eraser" : smudging ? "Smudge" : cloning ? "Clone" : wasShape ? "QuickShape" : "Brush stroke");
+        if (l.text != null && !adjPaint) l.text = null; // painting on a text layer makes it plain pixels
         push(pe);
         backupCanvas.drawBitmap(real, r, r, copy);
         changed();
@@ -1671,7 +1901,7 @@ public class CanvasView extends View {
             downSX = e.getX(); downSY = e.getY();
             if (target == view) {
                 if (gCount == 1) postDelayed(pickHold, 450);
-                postDelayed(undoHold, 600);
+                postDelayed(undoHold, undoHoldDelay);
             }
             return true;
         }
@@ -1700,6 +1930,7 @@ public class CanvasView extends View {
                         if (onCopyMenu != null) onCopyMenu.run();
                     }
                 } else {
+                    if (target == moveT) { moveT.postTranslate(-snapOffX, -snapOffY); snapOffX = snapOffY = 0; } // un-snap, then follow the finger
                     target.postTranslate(dx, dy);
                     if (gDist > 0 && m[2] > 0) {
                         float s = m[2] / gDist;
@@ -1710,14 +1941,24 @@ public class CanvasView extends View {
                         gMoved += Math.abs(m[2] - gDist);
                         gScale *= s;
                     }
+                    if (target == moveT && snapping && xform == 0) snapMove();
                 }
                 gX = m[0]; gY = m[1]; gDist = m[2]; gAngle = m[3];
+                if (target == view && gCount >= 2 && onViewChanged != null) { // zoom % and angle, like Procreate's HUD
+                    float[] v = new float[9];
+                    view.getValues(v);
+                    float zoom = (float) Math.hypot(v[0], v[3]) / fitScale() * 100;
+                    float ang = (float) Math.toDegrees(Math.atan2(v[3], v[0]));
+                    onViewChanged.accept(zoom, ang);
+                }
                 invalidate();
                 break;
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 gesture = false;
+                snapX = snapY = Float.NaN;
+                snapOffX = snapOffY = 0; // keep where it snapped
                 removeCallbacks(pickHold);
                 removeCallbacks(undoHold);
                 if (picking) { picking = false; break; }
@@ -1773,11 +2014,14 @@ public class CanvasView extends View {
     /** Lifts the selection (or whole layer) into a floating bitmap for transforming. */
     public void beginMove() {
         if (moving) return;
+        if (isLocked()) { moveBlocked = true; return; }
+        moveBlocked = false;
         moving = true;
         xfUndo.clear(); xfRedo.clear();
         moveUndoSize = undoList.size();
         Layer l = tgt();
         moveEdit = new PixelEdit(l, new Rect(0, 0, docW, docH));
+        moveEdit.name("Transform");
         selBeforeMove = selCopy();
         push(moveEdit);
         int n = docW * docH;
@@ -1813,12 +2057,13 @@ public class CanvasView extends View {
 
     /** Bakes a pending move/scale/rotate/distort into the layer pixels. */
     public void commitMove() {
+        finishShapeEdit();
         if (!moving) return;
         moving = false;
         xfUndo.clear(); xfRedo.clear();
         Layer l = tgt();
         Matrix m = transformMatrix();
-        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+        Paint p = smoothResample ? new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG) : new Paint();
         if (floatBmp != null) {
             Canvas lc = new Canvas(l.bmp);
             if (xform == 3) lc.concat(layerMatrix()); // drawFloat expects the view-space gesture on top
@@ -1838,6 +2083,7 @@ public class CanvasView extends View {
                 int n = docW * docH;
                 PixelEdit pe = moveEdit;
                 byte[] sb = deflate(selBeforeMove), sa = deflate(sel);
+                named("Transform");
                 push(new Op(() -> { pe.undo(); restoreSel(sb, n); }, () -> { pe.redo(); restoreSel(sa, n); },
                         pe.bytes() + sb.length + sa.length));
             }
@@ -1948,6 +2194,37 @@ public class CanvasView extends View {
         return true;
     }
 
+    /** True (and a message) if the layer being edited is locked. */
+    public boolean isLocked() {
+        if (tgt().locked || cur().locked) { if (onInfo != null) onInfo.accept("Layer is locked"); return true; }
+        return false;
+    }
+
+    public void toggleLock(int i) {
+        Layer l = layers.get(i);
+        boolean v = l.locked;
+        named(v ? "Unlock layer" : "Lock layer");
+        apply(new Op(() -> l.locked = v, () -> l.locked = !v, 64));
+    }
+
+    /** Marks one layer as the Reference for ColorDrop and Automatic selection (tap again to clear). */
+    public void toggleReference(int i) {
+        Layer l = layers.get(i);
+        boolean v = l.reference;
+        for (Layer x : layers) x.reference = false;
+        l.reference = !v;
+        changed();
+    }
+
+    /** Pixels used to decide fill / automatic-selection boundaries: the Reference layer if set. */
+    private int[] boundaryPixels() {
+        int[] px = new int[docW * docH];
+        Layer ref = null;
+        for (Layer l : layers) if (l.reference) ref = l;
+        (ref != null ? ref : tgt()).bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+        return px;
+    }
+
     public void setTool(int t) {
         commitMove();
         if (t != CLONE) cloneArmed = false;
@@ -1979,14 +2256,54 @@ public class CanvasView extends View {
         return out;
     }
 
+    private Bitmap selEdge;
+
     private void updateSelOverlay() {
         if (selOverlay != null) selOverlay.recycle();
         selOverlay = sel == null ? null : bytesToA8(sel, true);
+        if (selEdge != null) { selEdge.recycle(); selEdge = null; }
+        if (sel != null) { // outline for the marching ants
+            byte[] edge = new byte[sel.length];
+            for (int y = 0; y < docH; y++)
+                for (int x = 0; x < docW; x++) {
+                    int i = y * docW + x;
+                    boolean in = (sel[i] & 255) >= 128;
+                    boolean diff = (x > 0 && ((sel[i - 1] & 255) >= 128) != in) || (y > 0 && ((sel[i - docW] & 255) >= 128) != in)
+                            || (x < docW - 1 && ((sel[i + 1] & 255) >= 128) != in) || (y < docH - 1 && ((sel[i + docW] & 255) >= 128) != in);
+                    if (diff) edge[i] = (byte) 255;
+                }
+            selEdge = bytesToA8(edge, false);
+        }
         invalidate();
+    }
+
+    private float antsPhase;
+
+    /** Animated black/white dashes along the selection edge. */
+    private void drawAnts(Canvas c, float sc) {
+        if (selEdge == null) return;
+        Bitmap tile = Bitmap.createBitmap(12, 12, Bitmap.Config.ARGB_8888);
+        Canvas tc = new Canvas(tile);
+        tc.drawColor(Color.WHITE);
+        Paint q = new Paint(Paint.ANTI_ALIAS_FLAG);
+        q.setColor(Color.BLACK);
+        q.setStrokeWidth(4);
+        for (int k = -1; k <= 1; k++) tc.drawLine(k * 12, 12, k * 12 + 12, 0, q);
+        android.graphics.BitmapShader sh = new android.graphics.BitmapShader(tile, android.graphics.Shader.TileMode.REPEAT, android.graphics.Shader.TileMode.REPEAT);
+        Matrix m = new Matrix();
+        m.setScale(1 / sc, 1 / sc);
+        m.postTranslate(antsPhase / sc, 0);
+        sh.setLocalMatrix(m);
+        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
+        p.setShader(sh);
+        c.drawBitmap(selEdge, 0, 0, p);
+        antsPhase = (antsPhase + 2) % 12;
+        postInvalidateDelayed(90);
     }
 
     /** Makes the selection change since `before` an undo step. */
     private void recordSel(byte[] before) {
+        named("Selection");
         int n = docW * docH;
         byte[] b = before == null ? null : deflate(before);
         byte[] a = sel == null ? null : deflate(sel);
@@ -2021,6 +2338,43 @@ public class CanvasView extends View {
         changed();
     }
 
+    private boolean polyOpen, selMoved;
+    private float polyX0, polyY0, selDownSX, selDownSY;
+    private int lastAutoX = -1, lastAutoY;
+    private Edit lastAutoEdit;
+    private byte[] lastAutoBefore;
+
+    /** Freehand: closes an open tap-polygon into a selection (or drops it if too small). */
+    public void closePolygon() {
+        if (!polyOpen || selPath == null) { polyOpen = false; return; }
+        polyOpen = false;
+        RectF bounds = new RectF();
+        selPath.computeBounds(bounds, true);
+        float minSide = 6 / view.mapRadius(1f);
+        if (bounds.width() < minSide && bounds.height() < minSide) { selPath = null; invalidate(); return; }
+        selPath.close();
+        Bitmap b = Bitmap.createBitmap(docW, docH, Bitmap.Config.ALPHA_8);
+        new Canvas(b).drawPath(selPath, new Paint(Paint.ANTI_ALIAS_FLAG));
+        byte[] m = a8ToBytes(b);
+        b.recycle();
+        selPath = null;
+        combineSel(m);
+    }
+
+    /** Automatic selection: redo the last one with a new threshold. */
+    public void refineAuto(int thr) {
+        autoThr = thr;
+        if (lastAutoEdit == null || undoList.isEmpty() || undoList.get(undoList.size() - 1) != lastAutoEdit) return;
+        undoList.remove(undoList.size() - 1);
+        sel = lastAutoBefore == null ? null : lastAutoBefore.clone();
+        byte[] m = new byte[docW * docH];
+        Fx.flood(boundaryPixels(), docW, docH, lastAutoX, lastAutoY, autoThr, m);
+        combineSel(m);
+        lastAutoEdit = undoList.get(undoList.size() - 1);
+    }
+
+    public int autoThreshold() { return autoThr; }
+
     private boolean selectTouch(MotionEvent e, int action) {
         view.invert(inverse);
         map(e.getX(), e.getY());
@@ -2028,11 +2382,17 @@ public class CanvasView extends View {
         switch (action) {
             case MotionEvent.ACTION_DOWN:
                 selX0 = x; selY0 = y; autoSX = e.getX();
+                selDownSX = e.getX(); selDownSY = e.getY();
+                selMoved = false;
+                if (selKind == 1 && polyOpen && selPath != null) { selPath.lineTo(x, y); invalidate(); break; } // continue the polygon
+                polyOpen = false;
                 selPath = new Path();
                 selPath.moveTo(x, y);
+                polyX0 = x; polyY0 = y;
                 break;
             case MotionEvent.ACTION_MOVE:
                 if (selPath == null) break;
+                if (Math.hypot(e.getX() - selDownSX, e.getY() - selDownSY) > 10 * getResources().getDisplayMetrics().density) selMoved = true;
                 if (selKind == 0) {
                     autoThr = Fx.clamp(30 + Math.round((e.getX() - autoSX) / getWidth() * 255));
                     if (onInfo != null) onInfo.accept("Threshold " + autoThr * 100 / 255 + "%  (slide left/right)");
@@ -2046,14 +2406,24 @@ public class CanvasView extends View {
                 break;
             case MotionEvent.ACTION_UP: {
                 if (selPath == null) break;
+                if (selKind == 1) { // freehand: taps place polygon corners; tap the first corner (or Done) to close
+                    float d0 = (float) Math.hypot(x - polyX0, y - polyY0) * view.mapRadius(1f);
+                    if (!selMoved && polyOpen && d0 < 24 * getResources().getDisplayMetrics().density) { closePolygon(); break; }
+                    if (!selMoved) { polyOpen = true; if (onInfo != null) onInfo.accept("Tap to add corners · tap the first corner to close"); invalidate(); break; }
+                    if (polyOpen) { invalidate(); break; } // a dragged segment inside a polygon
+                }
                 byte[] m;
                 if (selKind == 0) {
                     int sx = (int) selX0, sy = (int) selY0;
                     if (sx < 0 || sy < 0 || sx >= docW || sy >= docH) { selPath = null; invalidate(); break; }
-                    int[] px = new int[docW * docH];
-                    tgt().bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
                     m = new byte[docW * docH];
-                    Fx.flood(px, docW, docH, sx, sy, autoThr, m);
+                    Fx.flood(boundaryPixels(), docW, docH, sx, sy, autoThr, m);
+                    lastAutoX = sx; lastAutoY = sy;
+                    lastAutoBefore = sel == null ? null : sel.clone();
+                    selPath = null;
+                    combineSel(m);
+                    lastAutoEdit = undoList.isEmpty() ? null : undoList.get(undoList.size() - 1);
+                    break;
                 } else {
                     RectF bounds = new RectF();
                     selPath.computeBounds(bounds, true);
@@ -2124,6 +2494,7 @@ public class CanvasView extends View {
 
     /** Copies (or cuts) the selection of the current layer into a new layer. */
     public boolean copyPaste(boolean cut) {
+        named("Paste");
         commitMove();
         if (layers.size() >= maxLayers()) return false;
         Layer src = cur();
@@ -2183,23 +2554,46 @@ public class CanvasView extends View {
     // ---------- Colour fill (ColorDrop) ----------
 
     /** Fills the area under a screen point on the current layer with the ink grey. */
+    public boolean fillMode;          // "Continue filling": taps fill
+    public int fillThreshold = 30;
+    private int lastFillX = -1, lastFillY;
+    private Edit lastFillEdit;
+
     public void colorDrop(float sx, float sy, int threshold) {
         commitMove();
         view.invert(inverse);
-        map(sx, sy);
-        int x = (int) pt[0], y = (int) pt[1];
+        pt[0] = sx; pt[1] = sy;
+        inverse.mapPoints(pt);
+        colorDropDoc((int) pt[0], (int) pt[1], threshold);
+    }
+
+    /** Fills from a canvas point (boundaries come from the Reference layer if one is set). */
+    public void colorDropDoc(int x, int y, int threshold) {
         if (x < 0 || y < 0 || x >= docW || y >= docH) return;
+        if (isLocked()) return;
+        fillThreshold = threshold;
         int n = docW * docH;
-        int[] px = new int[n];
         Layer l = tgt();
+        int[] px = new int[n];
         l.bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
         byte[] m = new byte[n];
-        Fx.flood(px, docW, docH, x, y, threshold, m);
+        Fx.flood(boundaryPixels(), docW, docH, x, y, threshold, m);
         Fx.dilate(m, docW, docH);
-        push(new PixelEdit(l, new Rect(0, 0, docW, docH)));
+        named("ColorDrop");
+        PixelEdit pe = new PixelEdit(l, new Rect(0, 0, docW, docH));
+        push(pe);
+        lastFillEdit = pe; lastFillX = x; lastFillY = y;
         fillWith(px, m);
         l.bmp.setPixels(px, 0, docW, 0, 0, docW, docH);
         afterHistory();
+    }
+
+    /** Redoes the last fill with a new threshold (slide after dropping, like Procreate). */
+    public void refineFill(int threshold) {
+        if (lastFillEdit == null || undoList.isEmpty() || undoList.get(undoList.size() - 1) != lastFillEdit) return;
+        undoList.remove(undoList.size() - 1);
+        lastFillEdit.undo();
+        colorDropDoc(lastFillX, lastFillY, threshold);
     }
 
     /** Paints ink over px where mask (and selection) allow. */
@@ -2217,6 +2611,8 @@ public class CanvasView extends View {
     }
 
     public void fillLayer() {
+        if (isLocked()) return;
+        named("Fill layer");
         commitMove();
         Layer l = tgt();
         int[] px = new int[docW * docH];
@@ -2228,6 +2624,8 @@ public class CanvasView extends View {
     }
 
     public void invertLayer() {
+        if (isLocked()) return;
+        named("Invert");
         commitMove();
         Layer l = tgt();
         int[] px = new int[docW * docH], out = new int[docW * docH];
@@ -2256,6 +2654,8 @@ public class CanvasView extends View {
     public boolean adjusting() { return adjSrc != null; }
 
     public void beginAdjust() {
+        if (isLocked()) return;
+        adjPencil = false; adjOut = null;
         commitMove();
         Layer l = tgt();
         adjEdit = new PixelEdit(l, new Rect(0, 0, docW, docH));
@@ -2291,8 +2691,47 @@ public class CanvasView extends View {
     }
 
     /** Applies (runs the final effect synchronously) or cancels the adjustment. */
+    // Pencil mode: the full effect is computed once, then painted in with the current brush
+    public boolean adjPencil;
+    public String adjName = "Adjustment";
+    private boolean adjPaint;
+    private int[] adjOut;
+    private int adjUndoSize;
+
+    /** Switches the running adjustment to Pencil mode: the layer goes back to normal and strokes paint the effect in. */
+    public void adjustPencil(AdjFn fn) {
+        if (adjSrc == null) return;
+        adjPencil = true;
+        adjOut = new int[adjSrc.length];
+        fn.run(adjSrc, adjOut);
+        Fx.mixSel(adjSrc, adjOut, sel);
+        adjGen++;
+        tgt().bmp.setPixels(adjSrc, 0, docW, 0, 0, docW, docH);
+        adjUndoSize = undoList.size();
+        syncBackup();
+        invalidate();
+    }
+
+    private int[] adjBlock(Rect r) {
+        int w = r.width(), h = r.height();
+        if (buf2.length < w * h) buf2 = new int[w * h];
+        for (int y = 0; y < h; y++) System.arraycopy(adjOut, (r.top + y) * docW + r.left, buf2, y * w, w);
+        return buf2;
+    }
+
     public void endAdjust(AdjFn fn) {
         if (adjSrc == null) return;
+        if (adjPencil) { // strokes are already undo steps; Cancel removes them
+            int[] src = adjSrc;
+            adjSrc = null; adjOut = null; adjPencil = false; adjGen++;
+            if (fn == null) {
+                tgt().bmp.setPixels(src, 0, docW, 0, 0, docW, docH);
+                while (undoList.size() > adjUndoSize) undoList.remove(undoList.size() - 1);
+            }
+            adjEdit = null;
+            afterHistory();
+            return;
+        }
         int[] src = adjSrc;
         adjSrc = null;
         adjGen++;
@@ -2302,6 +2741,7 @@ public class CanvasView extends View {
             fn.run(src, out);
             Fx.mixSel(src, out, sel);
             l.bmp.setPixels(out, 0, docW, 0, 0, docW, docH);
+            adjEdit.name(adjName);
             push(adjEdit);
         } else l.bmp.setPixels(src, 0, docW, 0, 0, docW, docH);
         adjEdit = null;
@@ -2330,7 +2770,9 @@ public class CanvasView extends View {
 
     // ---------- Liquify ----------
 
-    public int liqMode;                 // 0 push, 1 twirl right, 2 twirl left, 3 pinch, 4 expand, 5 reconstruct
+    public int liqMode;                 // 0 push, 1 twirl right, 2 twirl left, 3 pinch, 4 expand, 5 reconstruct, 6 crystals, 7 edge
+    public float liqMomentum;           // 0..1: keeps going after you lift
+    private float liqLastDx, liqLastDy;
     public float liqSize = 120, liqStrength = 0.5f;
     private int[] liqSrc;
     private float[] fdx, fdy;
@@ -2341,6 +2783,7 @@ public class CanvasView extends View {
     private static final int G = 4;     // displacement grid spacing (pixels)
 
     public void beginLiquify() {
+        if (isLocked()) return;
         commitMove();
         Layer l = tgt();
         liqEdit = new PixelEdit(l, new Rect(0, 0, docW, docH));
@@ -2387,12 +2830,25 @@ public class CanvasView extends View {
                 break;
             case MotionEvent.ACTION_MOVE:
                 if (!liqDown) break;
+                liqLastDx = x - liqX; liqLastDy = y - liqY;
                 liquifyAt(x, y, x - liqX, y - liqY, 1f);
                 liqX = x; liqY = y;
                 break;
             default:
                 liqDown = false;
                 removeCallbacks(liqTick);
+                if (liqMomentum > 0) { // carry on a little after lifting, slowing down
+                    int steps = Math.round(liqMomentum * 20);
+                    for (int i = 1; i <= steps; i++) {
+                        float f = 1 - i / (float) (steps + 1);
+                        int k = i;
+                        postDelayed(() -> {
+                            if (liqSrc == null) return;
+                            liqX += liqLastDx * f; liqY += liqLastDy * f;
+                            liquifyAt(liqX, liqY, liqLastDx * f, liqLastDy * f, f);
+                        }, 16L * k);
+                    }
+                }
         }
         return true;
     }
@@ -2418,6 +2874,19 @@ public class CanvasView extends View {
                     }
                     case 3: fdx[i] -= vx * 0.04f * w * st; fdy[i] -= vy * 0.04f * w * st; break;
                     case 4: fdx[i] += vx * 0.04f * w * st; fdy[i] += vy * 0.04f * w * st; break;
+                    case 6: { // crystals: shattered random offsets
+                        int hsh = (gx * 73856093) ^ (gy * 19349663);
+                        float rx = ((hsh & 255) / 255f - 0.5f), ry = (((hsh >> 8) & 255) / 255f - 0.5f);
+                        fdx[i] += rx * R * 0.08f * w * st; fdy[i] += ry * R * 0.08f * w * st;
+                        break;
+                    }
+                    case 7: { // edge: pulls towards a line along the stroke
+                        float len = (float) Math.hypot(liqLastDx, liqLastDy);
+                        float nx = len > 0 ? -liqLastDy / len : 0, ny = len > 0 ? liqLastDx / len : 1;
+                        float along = vx * nx + vy * ny;
+                        fdx[i] -= nx * along * 0.06f * w * st; fdy[i] -= ny * along * 0.06f * w * st;
+                        break;
+                    }
                     default: fdx[i] *= 1 - 0.25f * w * Math.max(0.2f, st); fdy[i] *= 1 - 0.25f * w * Math.max(0.2f, st);
                 }
             }
@@ -2470,6 +2939,7 @@ public class CanvasView extends View {
     // ---------- Layer masks ----------
 
     public void addMask() {
+        named("Add mask");
         Layer l = cur();
         if (l.mask != null) return;
         Layer m = newLayer(l.name + " mask");
@@ -2478,6 +2948,7 @@ public class CanvasView extends View {
     }
 
     public void deleteMask() {
+        named("Delete mask");
         Layer l = cur();
         Layer m = l.mask;
         if (m == null) return;
@@ -2486,6 +2957,7 @@ public class CanvasView extends View {
 
     /** Bakes the mask into the layer's transparency. */
     public void applyMask() {
+        named("Apply mask");
         Layer l = cur();
         Layer m = l.mask;
         if (m == null) return;
@@ -2518,6 +2990,7 @@ public class CanvasView extends View {
 
     /** Groups the current layer with the one below (joins the lower layer's group if it has one). */
     public void groupWithBelow() {
+        named("Group");
         int i = current;
         if (i == 0) return;
         Layer a = layers.get(i), b = layers.get(i - 1);
@@ -2528,6 +3001,7 @@ public class CanvasView extends View {
     }
 
     public void ungroup() {
+        named("Ungroup");
         Layer a = cur();
         int old = a.group;
         if (old == 0) return;
@@ -2535,6 +3009,7 @@ public class CanvasView extends View {
     }
 
     public void newGroup() {
+        named("New group");
         Layer a = cur();
         int old = a.group, g = nextGroup++;
         groups.put(g, new Group("Group " + g));
@@ -2543,6 +3018,7 @@ public class CanvasView extends View {
 
     /** Merges all layers of a group into one layer. */
     public void flattenGroup(int g) {
+        named("Flatten group");
         commitMove();
         int i = 0;
         while (i < layers.size() && layers.get(i).group != g) i++;
@@ -2561,24 +3037,28 @@ public class CanvasView extends View {
     // ---------- Layer properties ----------
 
     public void setBlend(int i, int mode) {
+        named("Blend mode");
         Layer l = layers.get(i);
         int old = l.blend;
         apply(new Op(() -> l.blend = old, () -> l.blend = mode, 64));
     }
 
     public void toggleAlphaLock(int i) {
+        named("Alpha lock");
         Layer l = layers.get(i);
         boolean v = l.alphaLock;
         apply(new Op(() -> l.alphaLock = v, () -> l.alphaLock = !v, 64));
     }
 
     public void toggleClip(int i) {
+        named("Clipping mask");
         Layer l = layers.get(i);
         boolean v = l.clip;
         apply(new Op(() -> l.clip = v, () -> l.clip = !v, 64));
     }
 
     public void rename(int i, String name) {
+        named("Rename layer");
         Layer l = layers.get(i);
         String old = l.name;
         apply(new Op(() -> l.name = old, () -> l.name = name, 64));
@@ -2586,18 +3066,51 @@ public class CanvasView extends View {
 
     /** New layer with text, centred, in the ink grey. */
     public boolean addTextLayer(String text, float sizePx, boolean bold) {
-        Layer l = newLayer(text.length() > 20 ? text.substring(0, 20) + "…" : text);
-        android.text.TextPaint tp = new android.text.TextPaint(Paint.ANTI_ALIAS_FLAG);
-        tp.setColor(Color.rgb(grey, grey, grey));
-        tp.setTextSize(sizePx);
-        tp.setFakeBoldText(bold);
-        android.text.StaticLayout sl = android.text.StaticLayout.Builder
-                .obtain(text, 0, text.length(), tp, Math.max(1, (int) (docW * 0.9f)))
-                .setAlignment(android.text.Layout.Alignment.ALIGN_CENTER).build();
-        Canvas c = new Canvas(l.bmp);
-        c.translate(docW * 0.05f, (docH - sl.getHeight()) / 2f);
-        sl.draw(c);
+        return addTextLayer(new TextInfo(text, sizePx, bold, 1, "sans-serif", grey));
+    }
+
+    /** New layer with editable text, centred on the canvas. */
+    public boolean addTextLayer(TextInfo t) {
+        Layer l = newLayer(t.text.length() > 20 ? t.text.substring(0, 20) + "…" : t.text);
+        l.text = t;
+        drawText(l, t, docW / 2f, docH / 2f);
         return addLayer(l);
+    }
+
+    private void drawText(Layer l, TextInfo t, float cx, float cy) {
+        android.text.TextPaint tp = new android.text.TextPaint(Paint.ANTI_ALIAS_FLAG);
+        tp.setColor(Color.rgb(t.grey, t.grey, t.grey));
+        tp.setTextSize(t.size);
+        tp.setTypeface(android.graphics.Typeface.create(t.font, t.bold ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL));
+        android.text.Layout.Alignment al = t.align == 0 ? android.text.Layout.Alignment.ALIGN_NORMAL
+                : t.align == 2 ? android.text.Layout.Alignment.ALIGN_OPPOSITE : android.text.Layout.Alignment.ALIGN_CENTER;
+        int width = Math.max(1, (int) (docW * 0.9f));
+        android.text.StaticLayout sl = android.text.StaticLayout.Builder.obtain(t.text, 0, t.text.length(), tp, width).setAlignment(al).build();
+        l.bmp.eraseColor(0);
+        Canvas c = new Canvas(l.bmp);
+        c.translate(cx - width / 2f, cy - sl.getHeight() / 2f);
+        sl.draw(c);
+        l.dirty = true;
+    }
+
+    /** Re-renders an editable text layer where its text currently is (after moving it). */
+    public void editText(Layer l, TextInfo t) {
+        int[] px = new int[docW * docH];
+        l.bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+        int minX = docW, minY = docH, maxX = -1, maxY = -1;
+        for (int i = 0; i < px.length; i++) if ((px[i] >>> 24) != 0) {
+            int x = i % docW, y = i / docW;
+            minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+        }
+        float cx = maxX < 0 ? docW / 2f : (minX + maxX) / 2f, cy = maxY < 0 ? docH / 2f : (minY + maxY) / 2f;
+        named("Edit text");
+        TextInfo old = l.text;
+        PixelEdit pe = new PixelEdit(l, new Rect(0, 0, docW, docH));
+        drawText(l, t, cx, cy);
+        l.text = t;
+        l.name = t.text.length() > 20 ? t.text.substring(0, 20) + "…" : t.text;
+        push(new Op(() -> { pe.undo(); l.text = old; }, () -> { pe.redo(); l.text = t; }, pe.bytes()));
+        afterHistory();
     }
 
     private void afterHistory() {
@@ -2656,6 +3169,19 @@ public class CanvasView extends View {
     }
 
     public void undo() {
+        String nm = !moving && !undoList.isEmpty() ? undoList.get(undoList.size() - 1).name() : "Transform step";
+        undoInner();
+        if (onHistory != null) onHistory.accept("Undo: " + nm);
+    }
+
+    public void redo() {
+        String nm = !moving && !redoList.isEmpty() ? redoList.get(redoList.size() - 1).name() : "Transform step";
+        redoInner();
+        if (onHistory != null) onHistory.accept("Redo: " + nm);
+    }
+
+    private void undoInner() {
+        finishShapeEdit();
         if (moving) { // step back through the transform without leaving it
             if (!xfUndo.isEmpty()) { xfRedo.add(xfState()); xfRestore(xfUndo.remove(xfUndo.size() - 1)); }
             else cancelMove();
@@ -2670,7 +3196,8 @@ public class CanvasView extends View {
         afterHistory();
     }
 
-    public void redo() {
+    private void redoInner() {
+        finishShapeEdit();
         if (moving && !xfRedo.isEmpty()) {
             xfUndo.add(xfState());
             xfRestore(xfRedo.remove(xfRedo.size() - 1));
@@ -2690,6 +3217,7 @@ public class CanvasView extends View {
     public void select(int i) { commitMove(); current = i; syncBackup(); changed(); }
 
     public boolean addLayer(Layer l) {
+        named("Add layer");
         commitMove();
         if (layers.size() >= maxLayers()) return false;
         int at = current + 1;
@@ -2706,6 +3234,7 @@ public class CanvasView extends View {
     }
 
     public void deleteLayer() {
+        named("Delete layer");
         commitMove();
         if (layers.size() < 2) { clearLayer(); return; }
         int at = current;
@@ -2714,7 +3243,75 @@ public class CanvasView extends View {
                      () -> { layers.remove(at); current = Math.max(0, at - 1); }, 64));
     }
 
+    /** Undo step that restores the whole layer list (order, groups). */
+    private void listOp(String nm, Runnable change) {
+        commitMove();
+        ArrayList<Layer> before = new ArrayList<>(layers);
+        int[] gBefore = new int[before.size()];
+        for (int i = 0; i < gBefore.length; i++) gBefore[i] = before.get(i).group;
+        int cb = current;
+        change.run();
+        ArrayList<Layer> after = new ArrayList<>(layers);
+        int[] gAfter = new int[after.size()];
+        for (int i = 0; i < gAfter.length; i++) gAfter[i] = after.get(i).group;
+        int ca = Math.min(current, layers.size() - 1);
+        named(nm);
+        push(new Op(() -> { layers.clear(); layers.addAll(before); for (int i = 0; i < gBefore.length; i++) before.get(i).group = gBefore[i]; current = cb; },
+                    () -> { layers.clear(); layers.addAll(after); for (int i = 0; i < gAfter.length; i++) after.get(i).group = gAfter[i]; current = ca; }, 64));
+        afterHistory();
+    }
+
+    /** Drag-to-reorder: moves layer from -> to. */
+    public void moveLayerTo(int from, int to) {
+        if (from == to || from < 0 || to < 0 || from >= layers.size() || to >= layers.size()) return;
+        listOp("Move layer", () -> {
+            Layer l = layers.remove(from);
+            layers.add(to, l);
+            // dropped inside a group joins it; dropped outside leaves it
+            int below = to > 0 ? layers.get(to - 1).group : 0, above = to < layers.size() - 1 ? layers.get(to + 1).group : 0;
+            l.group = below != 0 && below == above ? below : (below == above ? below : (l.group == below || l.group == above ? l.group : 0));
+            current = to;
+        });
+    }
+
+    public void deleteLayers(java.util.List<Layer> sel2) {
+        if (sel2.isEmpty() || sel2.size() >= layers.size()) return;
+        listOp("Delete layers", () -> { layers.removeAll(sel2); current = Math.max(0, Math.min(current, layers.size() - 1)); });
+    }
+
+    /** Groups the given layers, moving them next to each other. */
+    public void groupLayers(java.util.List<Layer> sel2) {
+        if (sel2.size() < 1) return;
+        int g = nextGroup++;
+        groups.put(g, new Group("Group " + g));
+        listOp("Group", () -> {
+            int top = 0;
+            for (Layer l : sel2) top = Math.max(top, layers.indexOf(l));
+            ArrayList<Layer> ordered = new ArrayList<>();
+            for (Layer l : layers) if (sel2.contains(l)) ordered.add(l);
+            Layer anchor = layers.get(top);
+            layers.removeAll(ordered);
+            int at = 0;
+            for (int i = 0; i < layers.size(); i++) if (layers.get(i) == anchor) at = i;
+            at = Math.min(layers.size(), Math.max(0, top - ordered.size() + 1));
+            layers.addAll(at, ordered);
+            for (Layer l : ordered) l.group = g;
+            current = at + ordered.size() - 1;
+        });
+    }
+
+    /** Pinch-merge: merges layers a..b (inclusive) into one, keeping blend and opacity results. */
+    public void mergeRange(int a, int b) {
+        int lo = Math.max(0, Math.min(a, b)), hi = Math.min(layers.size() - 1, Math.max(a, b));
+        if (hi <= lo) return;
+        Layer out = newLayer(layers.get(hi).name);
+        renderRange(new Canvas(out.bmp), lo, hi + 1, false);
+        java.util.List<Layer> gone = new ArrayList<>(layers.subList(lo, hi + 1));
+        listOp("Merge layers", () -> { layers.removeAll(gone); layers.add(lo, out); current = lo; });
+    }
+
     public void moveLayer(int dir) {
+        named("Move layer");
         commitMove();
         int a = current, b = current + dir;
         if (b < 0 || b >= layers.size()) return;
@@ -2723,6 +3320,7 @@ public class CanvasView extends View {
     }
 
     public void mergeDown() {
+        named("Merge down");
         commitMove();
         int at = current;
         if (at == 0) return;
@@ -2740,6 +3338,8 @@ public class CanvasView extends View {
     }
 
     public void clearLayer() {
+        if (isLocked()) return;
+        named("Clear layer");
         commitMove();
         push(new PixelEdit(tgt(), new Rect(0, 0, docW, docH)));
         if (sel == null) tgt().bmp.eraseColor(0);
@@ -2754,6 +3354,7 @@ public class CanvasView extends View {
     }
 
     public void toggleVisible(int i) {
+        named("Layer visibility");
         Layer l = layers.get(i);
         boolean v = l.visible;
         apply(new Op(() -> l.visible = v, () -> l.visible = !v, 64));
@@ -2763,6 +3364,7 @@ public class CanvasView extends View {
     public void previewOpacity(int o) { cur().opacity = o; invalidate(); }
 
     public void commitOpacity(int before) {
+        named("Layer opacity");
         Layer l = cur();
         int after = l.opacity;
         if (after != before) push(new Op(() -> l.opacity = before, () -> l.opacity = after, 64));

@@ -104,10 +104,10 @@ public class ExtraTest extends Base {
         assertEquals(800, cv.docW);
         assertNotNull("mask kept", cv.cur().mask);
         assertTrue(inkSum(L()) > 0);
-        for (int i = 0; i < 130; i++) line(W * .2f, H * (.2f + i * .004f), W * .25f, H * (.2f + i * .004f));
+        for (int i = 0; i < 270; i++) line(W * .2f, H * (.2f + i * .002f), W * .25f, H * (.2f + i * .002f));
         int n = 0;
-        while (n < 200) { long a = inkSum(L()); cv.undo(); n++; if (inkSum(L()) == a) break; }
-        assertTrue("about 100 undos available: " + n, n >= 100 && n <= 102);
+        while (n < 400) { long a = inkSum(L()); cv.undo(); n++; if (inkSum(L()) == a) break; }
+        assertTrue("about 250 undos available: " + n, n >= 250 && n <= 252);
     }
 
     @Test public void adjust_slide_on_canvas_changes_amount() {

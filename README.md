@@ -46,6 +46,28 @@ Layout matches Procreate so you can switch between the two easily:
 - **Animation Assist**: Actions → Animation Assist. Each layer is a frame; timeline with play, onion skins,
   frames per second, background layer; export animated GIF or MP4.
 
+### Procreate parity extras
+- **Layers panel**: long-press and drag a row to reorder; swipe left for Lock / Duplicate / Delete; swipe right to
+  multi-select (then Group / Delete); pinch two rows together to merge them. Layer options: Lock, Reference
+  (ColorDrop and fills use that layer's lines), Edit text.
+- **HUD**: size/opacity %, zoom % and angle, and "Undo: Brush stroke"-style banners.
+- **Undo**: 250 steps.
+- **Brush cursor**: outline of the brush when a stylus hovers (Prefs).
+- **QuickShape**: line, ellipse or rectangle; after lifting, drag the blue handles to edit. Put a second finger down
+  while holding to make a perfect circle / square or snap lines to 15°.
+- **ColorDrop**: after a fill, a bar shows Threshold (slide to refine) and Continue filling (each tap fills).
+- **Selection**: Polygon (tap corners, tap the first corner to close), Automatic threshold slider, marching ants.
+- **Gallery**: Select → Stack / Unstack / Duplicate / Delete; drag to reorder; pinch out for full preview;
+  tap a title to rename.
+- **Text**: Actions → Add → Add text. Font, size, bold, alignment; edit later from layer options.
+- **Animation**: tap a frame for hold duration, duplicate, delete; Loop / Ping-Pong / One shot.
+- **Prefs**: light interface, interface size, brush cursor, global pressure curve and smoothing, rapid-undo delay.
+  Drag the sidebar's ⋯ grip to move it up or down.
+- **Transform**: Snapping (to canvas centre/edges) and Smooth/Nearest interpolation.
+- **Adjustments**: Layer or Pencil mode (Pencil = paint the adjustment with the brush).
+- **Liquify**: Crystals and Edge modes, Momentum slider.
+- **Camera**: Actions → Add → Take a photo (imported as a layer).
+
 ### Gallery
 Inkwell opens in the Gallery like Procreate. ＋ New (size presets), Import (any supported file), tap to open,
 long-press to rename, duplicate or delete. Drawings save automatically.

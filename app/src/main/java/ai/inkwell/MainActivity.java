@@ -38,7 +38,7 @@ import java.io.OutputStream;
 
 public class MainActivity extends Activity {
     private static final long MAX_PIXELS = 3000L * 3000L;
-    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_BRUSH = 3, REQ_REF = 4, REQ_TL = 5, REQ_GIF = 6, REQ_AMP4 = 7, REQ_GALLERY = 8, REQ_EXPORT = 10;
+    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_BRUSH = 3, REQ_REF = 4, REQ_TL = 5, REQ_GIF = 6, REQ_AMP4 = 7, REQ_GALLERY = 8, REQ_CAMERA = 9, REQ_EXPORT = 10;
     private static final String[] FORMATS = {"PNG", "JPEG", "WebP", "PDF", "PSD (layers)"};
     private static final String[] MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf", "image/vnd.adobe.photoshop"};
     private static final String[] EXTS = {"png", "jpg", "webp", "pdf", "psd"};
@@ -121,7 +121,10 @@ public class MainActivity extends Activity {
         canvas.onGreyPicked = this::updateColor;
 
         // ---- Top bar: actions on the left, painting tools on the right ----
-        int ib = (int) (44 * dp);
+        prefs = getSharedPreferences("inkwell", MODE_PRIVATE);
+        int uiSize = prefs.getInt("uiSize", 1);                  // 0 small, 1 medium, 2 large
+        int ib = (int) ((uiSize == 0 ? 38 : uiSize == 2 ? 52 : 44) * dp);
+        Ui.light = prefs.getBoolean("light", false);
         LinearLayout left = new LinearLayout(this), right = new LinearLayout(this);
         left.setGravity(Gravity.CENTER_VERTICAL);
         right.setGravity(Gravity.CENTER_VERTICAL);
@@ -152,6 +155,8 @@ public class MainActivity extends Activity {
         top.addView(left, new FrameLayout.LayoutParams(-2, -1, Gravity.START));
         top.addView(right, new FrameLayout.LayoutParams(-2, -1, Gravity.END));
         View scroll = top; // hidden by four-finger tap
+        Ui.lighten(top);
+        Ui.lighten(colorBtn); // the colour circle shows the real grey
 
         // ---- Sidebar: size, eyedropper, opacity, undo/redo ----
         side = new LinearLayout(this);
@@ -162,12 +167,26 @@ public class MainActivity extends Activity {
         sbg.setCornerRadius(12 * dp);
         side.setBackground(sbg);
         side.setPadding(0, (int) (6 * dp), 0, (int) (6 * dp));
+        TextView grip = new TextView(this); // drag to move the sidebar up or down
+        grip.setText("⋯");
+        grip.setTextColor(0xFF8E8E93);
+        grip.setGravity(Gravity.CENTER);
+        float[] gy = new float[2];
+        grip.setOnTouchListener((v, e) -> {
+            if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) { gy[0] = e.getRawY(); gy[1] = side.getTranslationY(); }
+            else if (e.getActionMasked() == android.view.MotionEvent.ACTION_MOVE) {
+                float lim = stage.getHeight() / 2f - side.getHeight() / 2f;
+                side.setTranslationY(Math.max(-lim, Math.min(lim, gy[1] + e.getRawY() - gy[0])));
+            } else prefs.edit().putFloat("sideY", side.getTranslationY()).apply();
+            return true;
+        });
+        side.addView(grip, new LinearLayout.LayoutParams(-1, (int) (22 * dp)));
         sizeS = new Ui.VSlider(this, (float) Math.sqrt((canvas.size - 1) / 149f));
-        sizeS.listener = (v, done) -> canvas.size = 1 + 149 * v * v; // finer control at small sizes
+        sizeS.listener = (v, done) -> { canvas.size = 1 + 149 * v * v; hud("Size " + Math.round(v * 100) + "%"); }; // finer control at small sizes
         side.addView(sizeS, new LinearLayout.LayoutParams((int) (40 * dp), (int) (150 * dp)));
         pickBtn = icon(side, Ui.PICK, (int) (40 * dp), v -> { canvas.pickNext = !canvas.pickNext; pickBtn.setOn(canvas.pickNext); });
         opS = new Ui.VSlider(this, canvas.opacity);
-        opS.listener = (v, done) -> canvas.opacity = Math.max(0.01f, v);
+        opS.listener = (v, done) -> { canvas.opacity = Math.max(0.01f, v); hud("Opacity " + Math.round(canvas.opacity * 100) + "%"); };
         side.addView(opS, new LinearLayout.LayoutParams((int) (40 * dp), (int) (150 * dp)));
         icon(side, Ui.UNDO, (int) (40 * dp), v -> canvas.undo());
         icon(side, Ui.REDO, (int) (40 * dp), v -> canvas.redo());
@@ -191,7 +210,9 @@ public class MainActivity extends Activity {
             });
             m.show();
         };
-        canvas.onInfo = msg -> Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+        canvas.onInfo = this::hud;
+        canvas.onHistory = this::hud;
+        canvas.onViewChanged = (z, a) -> hud(Math.round(z) + "%   ·   " + Math.round(a) + "°");
         setTool(CanvasView.DRAW);
         updateBrush();
         updateColor();
@@ -234,7 +255,10 @@ public class MainActivity extends Activity {
         });
         panel.addView(opacityBar);
         ScrollView ls = new ScrollView(this);
-        layerList = new LinearLayout(this);
+        layerList = new LinearLayout(this) {
+            @Override public boolean onInterceptTouchEvent(android.view.MotionEvent e) { return pinchMerge(e) || super.onInterceptTouchEvent(e); }
+            @Override public boolean onTouchEvent(android.view.MotionEvent e) { pinchMerge(e); return true; }
+        };
         layerList.setOrientation(LinearLayout.VERTICAL);
         ls.addView(layerList);
         panel.addView(ls, new LinearLayout.LayoutParams(-1, 0, 1f));
@@ -248,6 +272,8 @@ public class MainActivity extends Activity {
         sideLp = new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL);
         sideLp.setMargins((int) (6 * dp), 0, (int) (6 * dp), 0);
         stage.addView(side, sideLp);
+        Ui.lighten(side);
+        Ui.lighten(panel);
         bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.VERTICAL);
         android.graphics.drawable.GradientDrawable bbg = new android.graphics.drawable.GradientDrawable();
@@ -256,6 +282,7 @@ public class MainActivity extends Activity {
         bottom.setBackground(bbg);
         bottom.setPadding((int) (8 * dp), (int) (4 * dp), (int) (8 * dp), (int) (4 * dp));
         bottom.setVisibility(View.GONE);
+        Ui.lighten(bottom);
         FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         blp.setMargins((int) (8 * dp), 0, (int) (8 * dp), (int) (10 * dp));
         stage.addView(bottom, blp);
@@ -269,6 +296,7 @@ public class MainActivity extends Activity {
         timeline.setOrientation(LinearLayout.VERTICAL);
         timeline.setBackgroundColor(Ui.BAR);
         timeline.setVisibility(View.GONE);
+        Ui.lighten(timeline);
         root.addView(timeline, new LinearLayout.LayoutParams(-1, -2));
         this.stage = stage;
         shell = new FrameLayout(this);
@@ -289,9 +317,13 @@ public class MainActivity extends Activity {
         loadBrushes();
         canvas.onCommitted = this::captureTimelapse;
         canvas.onFrame = () -> { if (refView != null && refView.getVisibility() == View.VISIBLE && refMode == 0) refContent.invalidate(); };
-        prefs = getSharedPreferences("inkwell", MODE_PRIVATE);
         tlOn = prefs.getBoolean("timelapse", true);
         canvas.fingerPaint = prefs.getBoolean("fingerPaint", false);
+        canvas.showCursor = prefs.getBoolean("cursor", false);
+        canvas.globalCurve = prefs.getFloat("gCurve", 1f);
+        canvas.globalSmooth = prefs.getFloat("gSmooth", 0f);
+        canvas.undoHoldDelay = prefs.getInt("undoDelay", 600);
+        side.setTranslationY(prefs.getFloat("sideY", 0));
         loadToolPrefs();
         applyTool(canvas.tool);
         gdir = new File(getFilesDir(), "gallery");
@@ -491,6 +523,7 @@ public class MainActivity extends Activity {
     }
 
     private void setTool(int t) {
+        if (canvas.tool == CanvasView.SELECT && t != CanvasView.SELECT) canvas.closePolygon();
         if (canvas.adjusting()) finishAdjust(true);      // like Procreate: picking another tool applies
         if (canvas.liquifying()) { canvas.endLiquify(true); }
         if (t != canvas.tool) {
@@ -545,7 +578,7 @@ public class MainActivity extends Activity {
         String[] kinds = {"Automatic", "Freehand", "Rectangle", "Ellipse"};
         for (int i = 0; i < kinds.length; i++) {
             int k = i;
-            chip(a, kinds[i], canvas.selKind == i, v -> { canvas.selKind = k; showSelectBar(); });
+            chip(a, kinds[i], canvas.selKind == i, v -> { canvas.closePolygon(); canvas.selKind = k; showSelectBar(); });
         }
         chip(b, canvas.selSubtract ? "− Subtract" : "+ Add", canvas.selSubtract, v -> { canvas.selSubtract = !canvas.selSubtract; showSelectBar(); });
         chip(b, "Invert", false, v -> canvas.invertSelection());
@@ -555,8 +588,9 @@ public class MainActivity extends Activity {
         chip(b, "Clear", false, v -> canvas.clearSelection());
         chip(b, "Save", false, v -> saveSelection());
         chip(b, "Load", false, this::loadSelectionMenu);
-        chip(a, "Done", true, v -> setTool(CanvasView.DRAW));
-        showBar(a, b);
+        chip(a, "Done", true, v -> { canvas.closePolygon(); setTool(CanvasView.DRAW); });
+        if (canvas.selKind == 0) showBar(a, b, slider("Threshold", canvas.autoThreshold(), 0, 255, v -> canvas.refineAuto(v)));
+        else showBar(a, b);
     }
 
     private void featherDialog() {
@@ -578,6 +612,8 @@ public class MainActivity extends Activity {
         chip(a, "Flip V", false, v -> canvas.flip(false));
         chip(a, "Rotate 90°", false, v -> canvas.rotate90());
         chip(a, "Reset", false, v -> canvas.resetTransform());
+        chip(a, (canvas.snapping ? "✓ " : "") + "Snapping", canvas.snapping, v -> { canvas.snapping = !canvas.snapping; showTransformBar(); });
+        chip(a, canvas.smoothResample ? "Smooth" : "Nearest", false, v -> { canvas.smoothResample = !canvas.smoothResample; canvas.invalidate(); showTransformBar(); });
         chip(a, "Done", false, v -> setTool(CanvasView.DRAW));
         showBar(a);
     }
@@ -700,9 +736,13 @@ public class MainActivity extends Activity {
                 adjBars[i].setProgress(Math.round((a.def[i] - a.min[i]) / (a.max[i] - a.min[i]) * 1000));
             canvas.previewAdjust(a.fn.apply(adjVals));
         });
+        chip(btns, canvas.adjPencil ? "Pencil" : "Layer", false, v -> { // Pencil: paint the effect in with the brush
+            if (!canvas.adjPencil) { canvas.adjustPencil(a.fn.apply(adjVals)); hud("Paint where you want " + a.name); ((TextView) v).setText("Pencil"); }
+        });
         chip(btns, "Cancel", false, v -> finishAdjust(false));
         chip(btns, "Apply", true, v -> finishAdjust(true));
         showBar(box, btns);
+        canvas.adjName = a.name;
         canvas.onAdjustDrag = (f, done) -> {
             if (adjBars.length == 0) return;
             if (dragStart < 0) dragStart = adjBars[0].getProgress();
@@ -731,13 +771,14 @@ public class MainActivity extends Activity {
 
     private void showLiquifyBar() {
         LinearLayout modes = barRow();
-        String[] names = {"Push", "Twirl ↻", "Twirl ↺", "Pinch", "Expand", "Reconstruct"};
+        String[] names = {"Push", "Twirl ↻", "Twirl ↺", "Pinch", "Expand", "Reconstruct", "Crystals", "Edge"};
         for (int i = 0; i < names.length; i++) {
             int k = i;
             chip(modes, names[i], canvas.liqMode == i, v -> { canvas.liqMode = k; showLiquifyBar(); });
         }
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(slider("Momentum", Math.round(canvas.liqMomentum * 100), 0, 100, v -> canvas.liqMomentum = v / 100f));
         TextView sl = new TextView(this);
         sl.setText("Size");
         sl.setTextColor(0xFF9A9A9E);
@@ -795,12 +836,26 @@ public class MainActivity extends Activity {
                 if (cdDrag) {
                     int[] loc = new int[2];
                     canvas.getLocationOnScreen(loc);
-                    canvas.colorDrop(e.getRawX() - loc[0], e.getRawY() - loc[1], 30);
+                    canvas.colorDrop(e.getRawX() - loc[0], e.getRawY() - loc[1], canvas.fillThreshold);
+                    showFillBar();
                     return true;
                 }
                 break;
         }
         return false; // let taps through to the colour picker
+    }
+
+    /** After ColorDrop: adjust the threshold (refills live) and "Continue filling" like Procreate. */
+    private void showFillBar() {
+        LinearLayout a = barRow();
+        android.widget.Switch cont = new android.widget.Switch(this);
+        cont.setText("Continue filling  ");
+        cont.setTextColor(Color.WHITE);
+        cont.setChecked(canvas.fillMode);
+        cont.setOnCheckedChangeListener((b, on) -> { canvas.fillMode = on; if (on) hud("Tap areas to fill them"); });
+        a.addView(cont);
+        chip(a, "Done", true, v -> { canvas.fillMode = false; bottom.setVisibility(View.GONE); });
+        showBar(slider("ColorDrop threshold", canvas.fillThreshold, 0, 255, v -> canvas.refineFill(v)), a);
     }
 
     // ---------- Layer options (tap the selected layer) ----------
@@ -831,6 +886,9 @@ public class MainActivity extends Activity {
         mm.add(0, 25, 15, "Group with layer below");
         mm.add(0, 26, 16, "New group");
         if (l.group != 0) mm.add(0, 27, 17, "Remove from group");
+        mm.add(0, 28, 18, "Lock").setCheckable(true).setChecked(l.locked);
+        mm.add(0, 29, 19, "Reference").setCheckable(true).setChecked(l.reference);
+        if (l.text != null) mm.add(0, 30, 20, "Edit text");
         m.setOnMenuItemClickListener(it -> {
             int id = it.getItemId();
             if (id >= 100) { canvas.setBlend(idx, id - 100); return true; }
@@ -860,6 +918,9 @@ public class MainActivity extends Activity {
                 case 25: canvas.groupWithBelow(); break;
                 case 26: canvas.newGroup(); break;
                 case 27: canvas.ungroup(); break;
+                case 28: canvas.toggleLock(idx); break;
+                case 29: canvas.toggleReference(idx); hud(canvas.layers.get(idx).reference ? "Reference: fills use this layer's lines" : "Reference off"); break;
+                case 30: textDialog(l); break;
             }
             return true;
         });
@@ -873,7 +934,14 @@ public class MainActivity extends Activity {
         m.show();
     }
 
-    private void textDialog() {
+    private void textDialog() { textDialog(null); }
+
+    private static final String[] FONTS = {"sans-serif", "serif", "monospace", "sans-serif-condensed", "casual", "cursive"};
+    private static final String[] FONT_NAMES = {"Sans", "Serif", "Mono", "Condensed", "Casual", "Cursive"};
+
+    /** Add text, or edit an existing text layer (font, size, bold, alignment). */
+    private void textDialog(CanvasView.Layer editing) {
+        CanvasView.TextInfo cur = editing != null ? editing.text : null;
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         int p = (int) (16 * dp);
@@ -881,24 +949,48 @@ public class MainActivity extends Activity {
         android.widget.EditText et = new android.widget.EditText(this);
         et.setHint("Text");
         et.setMinLines(2);
+        if (cur != null) et.setText(cur.text);
         box.addView(et);
+        int[] font = {cur == null ? 0 : Math.max(0, java.util.Arrays.asList(FONTS).indexOf(cur.font))};
+        int[] align = {cur == null ? 1 : cur.align};
+        LinearLayout fonts = barRow(), aligns = barRow();
+        Runnable[] redraw = new Runnable[1];
+        redraw[0] = () -> {
+            fonts.removeAllViews(); aligns.removeAllViews();
+            for (int i = 0; i < FONTS.length; i++) {
+                int k = i;
+                TextView c = chip(fonts, FONT_NAMES[i], font[0] == i, v -> { font[0] = k; redraw[0].run(); });
+                c.setTypeface(android.graphics.Typeface.create(FONTS[i], android.graphics.Typeface.NORMAL));
+            }
+            String[] an = {"Left", "Centre", "Right"};
+            for (int i = 0; i < 3; i++) { int k = i; chip(aligns, an[i], align[0] == i, v -> { align[0] = k; redraw[0].run(); }); }
+        };
+        redraw[0].run();
+        HorizontalScrollView fs = new HorizontalScrollView(this);
+        fs.addView(fonts);
+        box.addView(fs);
+        box.addView(aligns);
         TextView sl = new TextView(this);
         sl.setText("Size");
         box.addView(sl);
         SeekBar sb = new SeekBar(this);
         sb.setMax(400);
-        sb.setProgress(Math.max(24, canvas.docW / 12));
+        sb.setProgress(cur != null ? Math.round(cur.size) : Math.max(24, canvas.docW / 12));
         box.addView(sb);
         android.widget.CheckBox bold = new android.widget.CheckBox(this);
         bold.setText("Bold");
+        bold.setChecked(cur != null && cur.bold);
         box.addView(bold);
-        new AlertDialog.Builder(this).setTitle("Add text").setView(box)
-                .setPositiveButton("Add", (d, w) -> {
+        new AlertDialog.Builder(this).setTitle(editing != null ? "Edit text" : "Add text").setView(box)
+                .setPositiveButton(editing != null ? "Update" : "Add", (d, w) -> {
                     String t = et.getText().toString();
                     if (t.trim().isEmpty()) return;
-                    if (!canvas.addTextLayer(t, Math.max(8, sb.getProgress()), bold.isChecked())) { full(); return; }
+                    CanvasView.TextInfo ti = new CanvasView.TextInfo(t, Math.max(8, sb.getProgress()), bold.isChecked(), align[0], FONTS[font[0]],
+                            cur != null ? cur.grey : canvas.grey);
+                    if (editing != null) { canvas.editText(editing, ti); return; }
+                    if (!canvas.addTextLayer(ti)) { full(); return; }
                     setTool(CanvasView.MOVE);
-                    toast("Text added on a new layer. Drag to place it, then tap Done.");
+                    toast("Text added. Drag to place it, then tap Done. Edit it later from layer options.");
                 })
                 .setNegativeButton("Cancel", null).show();
     }
@@ -1048,6 +1140,7 @@ public class MainActivity extends Activity {
         switch (tab) {
             case 0: // Add
                 pop.item("Insert a file", true, () -> action(2, anchor));
+                pop.item("Take a photo", true, this::takePhoto);
                 pop.item("Open as a new drawing", true, () -> action(1, anchor));
                 pop.item("Add text", true, () -> action(9, anchor));
                 pop.item("Cut", true, () -> canvas.copy(false, true));
@@ -1081,8 +1174,23 @@ public class MainActivity extends Activity {
                 pop.item("Delete recorded time-lapse", true, () -> confirm("Delete the recorded time-lapse?", () -> { for (File f : tlFrames()) f.delete(); }));
                 break;
             case 4: // Prefs
+                pop.toggle("Light interface", Ui.light, v -> { prefs.edit().putBoolean("light", v).apply(); pop.win.dismiss(); saveCurrent(this::recreate); });
                 pop.toggle("Right-hand interface", !left, v -> action(7, anchor));
+                pop.toggle("Brush cursor", canvas.showCursor, v -> { canvas.showCursor = v; prefs.edit().putBoolean("cursor", v).apply(); });
                 pop.toggle("Fingers paint when using a stylus", canvas.fingerPaint, v -> action(14, anchor));
+                pop.section("Interface size");
+                LinearLayout sz = barRow();
+                String[] szn = {"Small", "Medium", "Large"};
+                for (int i = 0; i < 3; i++) {
+                    int k = i;
+                    chip(sz, szn[i], prefs.getInt("uiSize", 1) == i, v -> { prefs.edit().putInt("uiSize", k).apply(); pop.win.dismiss(); saveCurrent(this::recreate); });
+                }
+                pop.add(sz);
+                pop.section("Pressure and smoothing (all brushes)");
+                pop.add(slider("Pressure curve", Math.round(canvas.globalCurve * 100), 30, 300, v -> { canvas.globalCurve = v / 100f; prefs.edit().putFloat("gCurve", canvas.globalCurve).apply(); }));
+                pop.add(slider("Smoothing", Math.round(canvas.globalSmooth * 100), 0, 100, v -> { canvas.globalSmooth = v / 100f; prefs.edit().putFloat("gSmooth", canvas.globalSmooth).apply(); }));
+                pop.section("Gesture controls");
+                pop.add(slider("Rapid undo delay (ms)", canvas.undoHoldDelay, 200, 1500, v -> { canvas.undoHoldDelay = v; prefs.edit().putInt("undoDelay", v).apply(); }));
                 pop.item("Import brushes", true, () -> action(6, anchor));
                 break;
             default: // Help
@@ -1091,6 +1199,21 @@ public class MainActivity extends Activity {
                         .setMessage("A tiny greyscale drawing app. No libraries, plain Java.").setPositiveButton("OK", null).show());
         }
         pop.show(anchor);
+    }
+
+    private Uri photoUri;
+
+    /** Camera photo inserted as a new layer (saved to Pictures/Inkwell first; no extra permission needed). */
+    private void takePhoto() {
+        try {
+            android.content.ContentValues cv = new android.content.ContentValues();
+            cv.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, "inkwell_photo_" + System.currentTimeMillis() + ".jpg");
+            cv.put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+            cv.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Inkwell");
+            photoUri = getContentResolver().insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+            startActivityForResult(new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
+                    .putExtra(android.provider.MediaStore.EXTRA_OUTPUT, photoUri), REQ_CAMERA);
+        } catch (Exception e) { hud("No camera app available"); }
     }
 
     private void exportAnimRequest(boolean gif) {
@@ -1421,6 +1544,7 @@ public class MainActivity extends Activity {
         body.addView(ss, new LinearLayout.LayoutParams(0, -1, 1f));
         col.addView(body, new LinearLayout.LayoutParams(-1, 0, 1f));
         studio.addView(col);
+        Ui.lighten(studio);
         shell.addView(studio);
     }
 
@@ -1523,6 +1647,7 @@ public class MainActivity extends Activity {
                 return true;
             }
         };
+        Ui.lighten(strip); Ui.lighten(preview); // true greys inside the (inverted) light panel
         box.addView(strip, new LinearLayout.LayoutParams(-1, (int) (56 * dp)));
         sb.setProgress(255 - canvas.grey);
         sb.setOnSeekBarChangeListener(new Slider() {
@@ -1568,6 +1693,7 @@ public class MainActivity extends Activity {
             d.setStroke(1, 0xFF636366);
             v.setBackground(d);
             v.setOnClickListener(x -> sb.setProgress(255 - g));
+            Ui.lighten(v);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (28 * dp), (int) (28 * dp));
             lp.setMargins(2, 2, (int) (4 * dp), 2);
             sw.addView(v, lp);
@@ -1581,7 +1707,34 @@ public class MainActivity extends Activity {
                 .setNegativeButton("Cancel", null).show();
     }
 
-    private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
+    private void toast(String s) { hud(s); }
+
+    private TextView hudView;
+
+    /** Small banner at the top of the canvas, like Procreate's notices. */
+    private void hud(String msg) {
+        if (stage == null) { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show(); return; }
+        if (hudView == null) {
+            hudView = new TextView(this);
+            hudView.setTextColor(Color.WHITE);
+            hudView.setTextSize(14);
+            hudView.setPadding((int) (14 * dp), (int) (6 * dp), (int) (14 * dp), (int) (6 * dp));
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setColor(0xE62C2C2E);
+            bg.setCornerRadius(16 * dp);
+            hudView.setBackground(bg);
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+            lp.topMargin = (int) (10 * dp);
+            stage.addView(hudView, lp);
+        }
+        hudView.setText(msg);
+        hudView.setVisibility(View.VISIBLE);
+        hudView.bringToFront();
+        hudView.removeCallbacks(hideHud);
+        hudView.postDelayed(hideHud, msg.length() > 40 ? 2600 : 1300);
+    }
+
+    private final Runnable hideHud = () -> { if (hudView != null) hudView.setVisibility(View.GONE); };
 
     private void full() { toast("Layer limit reached for this canvas size"); }
 
@@ -1633,8 +1786,10 @@ public class MainActivity extends Activity {
             LinearLayout r = new LinearLayout(this);
             r.setGravity(Gravity.CENTER_VERTICAL);
             r.setPadding(l.group != 0 ? (int) (18 * dp) : 0, (int) (3 * dp), 0, (int) (3 * dp));
-            r.setBackgroundColor(i == canvas.current ? 0xFF48484A : 0);
+            r.setBackgroundColor(multi.contains(l) ? 0xFF2F5F95 : i == canvas.current ? 0xFF48484A : 0);
+            r.setTag(idx);
             ImageView iv = new ImageView(this);
+            Ui.lighten(iv); // artwork keeps its true greys in light mode
             iv.setImageBitmap(thumbOf(l, tw, th));
             iv.setBackgroundColor(i == canvas.current && !l.editMask ? Ui.ACCENT : 0xFF888888);
             iv.setPadding(2, 2, 2, 2);
@@ -1642,6 +1797,7 @@ public class MainActivity extends Activity {
             r.addView(iv, new LinearLayout.LayoutParams(tw, th + 4));
             if (l.mask != null) {
                 ImageView mv = new ImageView(this);
+                Ui.lighten(mv);
                 mv.setImageBitmap(thumbOf(l.mask, tw, th));
                 mv.setBackgroundColor(i == canvas.current && l.editMask ? Ui.ACCENT : 0xFF555555);
                 mv.setPadding(2, 2, 2, 2);
@@ -1652,7 +1808,7 @@ public class MainActivity extends Activity {
                 r.addView(mv, mlp);
             }
             TextView name = new TextView(this);
-            name.setText((l.clip ? "↳ " : "") + l.name + (l.alphaLock ? "  α" : ""));
+            name.setText((l.clip ? "↳ " : "") + l.name + (l.alphaLock ? "  α" : "") + (l.locked ? "  🔒" : "") + (l.reference ? "  REF" : "") + (l.text != null ? "  T" : ""));
             name.setTextColor(Color.WHITE);
             name.setSingleLine(true);
             name.setPadding((int) (8 * dp), 0, 0, 0);
@@ -1671,9 +1827,115 @@ public class MainActivity extends Activity {
             vis.setOnClickListener(v -> canvas.toggleVisible(idx));
             r.addView(vis);
             r.setOnClickListener(v -> { if (idx == canvas.current) layerOptions(v, idx); else canvas.select(idx); });
+            r.setOnTouchListener(rowGestures(r, l, idx));
             layerList.addView(r);
         }
         backgroundRow();
+        if (!multi.isEmpty()) { // multi-select actions (swipe right on layers to select)
+            LinearLayout mb = barRow();
+            TextView t = new TextView(this);
+            t.setText(multi.size() + " selected  ");
+            t.setTextColor(Color.WHITE);
+            mb.addView(t);
+            chip(mb, "Group", false, v -> { canvas.groupLayers(new java.util.ArrayList<>(multi)); multi.clear(); refreshPanel(); });
+            chip(mb, "Delete", false, v -> confirm("Delete " + multi.size() + " layers?", () -> { canvas.deleteLayers(new java.util.ArrayList<>(multi)); multi.clear(); refreshPanel(); }));
+            chip(mb, "Clear", false, v -> { multi.clear(); refreshPanel(); });
+            layerList.addView(mb, 0);
+        }
+    }
+
+    private final java.util.LinkedHashSet<CanvasView.Layer> multi = new java.util.LinkedHashSet<>();
+
+    /** Layer row gestures like Procreate: long-press drag to reorder, swipe left for actions, swipe right to select. */
+    private View.OnTouchListener rowGestures(View row, CanvasView.Layer l, int idx) {
+        float[] st = new float[3]; // downX, downY, dragging(1)
+        Runnable startDrag = () -> {
+            st[2] = 1;
+            row.setElevation(12 * dp);
+            row.setAlpha(0.85f);
+            row.getParent().requestDisallowInterceptTouchEvent(true);
+        };
+        return (v, e) -> {
+            switch (e.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    st[0] = e.getRawX(); st[1] = e.getRawY(); st[2] = 0;
+                    row.postDelayed(startDrag, 380);
+                    return false;
+                case android.view.MotionEvent.ACTION_MOVE: {
+                    float dx = e.getRawX() - st[0], dy = e.getRawY() - st[1];
+                    if (st[2] == 1) { row.setTranslationY(dy); return true; }
+                    if (Math.hypot(dx, dy) > 12 * dp) row.removeCallbacks(startDrag);
+                    if (Math.abs(dx) > 48 * dp && Math.abs(dx) > Math.abs(dy) * 2) {
+                        row.removeCallbacks(startDrag);
+                        st[2] = 2;
+                        row.getParent().requestDisallowInterceptTouchEvent(true);
+                        if (dx < 0) layerSwipeActions(row, l, idx); // swipe left
+                        else { if (!multi.remove(l)) multi.add(l); refreshPanel(); } // swipe right: select
+                        return true;
+                    }
+                    return st[2] == 2;
+                }
+                default:
+                    row.removeCallbacks(startDrag);
+                    if (st[2] == 1) { // drop: find the row under the finger
+                        int target = idx;
+                        float y = e.getRawY();
+                        for (int c = 0; c < layerList.getChildCount(); c++) {
+                            View ch = layerList.getChildAt(c);
+                            if (!(ch.getTag() instanceof Integer) || ch == row) continue;
+                            int[] loc = new int[2];
+                            ch.getLocationOnScreen(loc);
+                            if (y >= loc[1] && y < loc[1] + ch.getHeight()) target = (Integer) ch.getTag();
+                        }
+                        row.setTranslationY(0);
+                        row.setElevation(0);
+                        row.setAlpha(1);
+                        canvas.moveLayerTo(idx, target);
+                        return true;
+                    }
+                    return st[2] == 2;
+            }
+        };
+    }
+
+    private void layerSwipeActions(View row, CanvasView.Layer l, int idx) {
+        Ui.Pop pop = new Ui.Pop(this, 200);
+        pop.item(l.locked ? "Unlock" : "Lock", true, () -> canvas.toggleLock(idx));
+        pop.item("Duplicate", true, () -> { canvas.select(idx); if (!canvas.duplicate()) full(); });
+        pop.item("Delete", canvas.layers.size() > 1, () -> { canvas.select(idx); canvas.deleteLayer(); });
+        pop.show(row);
+    }
+
+    /** Pinch two layers together in the list to merge them and everything between. */
+    private boolean pinchMerge(android.view.MotionEvent e) {
+        if (e.getPointerCount() < 2) { pinchA = -1; return false; }
+        if (e.getActionMasked() == android.view.MotionEvent.ACTION_POINTER_DOWN) {
+            pinchA = rowAt(e.getRawY(0));
+            pinchB = rowAt(e.getRawY(1));
+            pinchD = Math.abs(e.getY(1) - e.getY(0));
+            return true;
+        }
+        if (e.getActionMasked() == android.view.MotionEvent.ACTION_POINTER_UP && pinchA >= 0) {
+            float d = Math.abs(e.getY(1) - e.getY(0));
+            if (pinchB >= 0 && pinchA != pinchB && d < pinchD * 0.6f) { canvas.mergeRange(pinchA, pinchB); hud("Layers merged"); }
+            pinchA = -1;
+            return true;
+        }
+        return pinchA >= 0;
+    }
+
+    private int pinchA = -1, pinchB = -1;
+    private float pinchD;
+
+    private int rowAt(float rawY) {
+        for (int c = 0; c < layerList.getChildCount(); c++) {
+            View ch = layerList.getChildAt(c);
+            if (!(ch.getTag() instanceof Integer)) continue;
+            int[] loc = new int[2];
+            ch.getLocationOnScreen(loc);
+            if (rawY >= loc[1] && rawY < loc[1] + ch.getHeight()) return (Integer) ch.getTag();
+        }
+        return -1;
     }
 
     /** The "Background colour" row at the bottom of the Layers panel, like Procreate. */
@@ -1687,6 +1949,7 @@ public class MainActivity extends Activity {
         d.setStroke((int) (2 * dp), 0xFF636366);
         sw.setBackground(d);
         sw.setAlpha(canvas.bgVisible ? 1f : 0.35f);
+        Ui.lighten(sw);
         r.addView(sw, new LinearLayout.LayoutParams((int) (44 * dp), (int) (32 * dp)));
         TextView n = new TextView(this);
         n.setText("Background colour");
@@ -1729,6 +1992,7 @@ public class MainActivity extends Activity {
             dr.setStroke(1, 0xFF636366);
             v.setBackground(dr);
             v.setOnClickListener(x -> sb.setProgress(g));
+            Ui.lighten(v);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (26 * dp), (int) (26 * dp));
             lp.setMargins(2, 2, (int) (4 * dp), 2);
             sw.addView(v, lp);
@@ -1926,12 +2190,30 @@ public class MainActivity extends Activity {
     // ---------- Animation Assist ----------
 
     private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private int animMode; // 0 loop, 1 ping-pong, 2 one shot
+    private int playPos;
+
+    /** Frames in play order, each repeated for its hold, following the playback mode. */
+    private java.util.List<Integer> animSequence() {
+        java.util.ArrayList<Integer> seq = new java.util.ArrayList<>();
+        int f0 = canvas.firstFrame();
+        for (int i = f0; i < canvas.layers.size(); i++) for (int h = 0; h < Math.max(1, canvas.layers.get(i).hold); h++) seq.add(i);
+        if (animMode == 1 && canvas.layers.size() - f0 > 2) { // ping-pong: back again without repeating the ends
+            for (int i = canvas.layers.size() - 2; i > f0; i--) for (int h = 0; h < Math.max(1, canvas.layers.get(i).hold); h++) seq.add(i);
+        }
+        return seq;
+    }
+
     private final Runnable playTick = new Runnable() {
         public void run() {
             if (!canvas.playing) return;
-            int f0 = canvas.firstFrame(), n = canvas.layers.size() - f0;
-            if (n <= 0) return;
-            canvas.playFrame = f0 + ((canvas.playFrame - f0 + 1) % n);
+            java.util.List<Integer> seq = animSequence();
+            if (seq.isEmpty()) return;
+            if (playPos >= seq.size()) {
+                if (animMode == 2) { togglePlay(); return; } // one shot: stop at the end
+                playPos = 0;
+            }
+            canvas.playFrame = seq.get(playPos++);
             canvas.invalidate();
             handler.postDelayed(this, 1000 / Math.max(1, canvas.fps));
         }
@@ -1941,7 +2223,7 @@ public class MainActivity extends Activity {
 
     private void togglePlay() {
         canvas.playing = !canvas.playing;
-        if (canvas.playing) { canvas.playFrame = canvas.current; handler.post(playTick); }
+        if (canvas.playing) { playPos = 0; canvas.playFrame = canvas.current; handler.post(playTick); }
         canvas.invalidate();
         refreshTimeline();
     }
@@ -1995,6 +2277,7 @@ public class MainActivity extends Activity {
             ImageView iv = new ImageView(this);
             iv.setBackgroundColor(Color.WHITE);
             iv.setImageBitmap(thumbOf(canvas.layers.get(i), tw, th));
+            Ui.lighten(iv);
             iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
             cell.addView(iv, new LinearLayout.LayoutParams(tw, showH));
             TextView n = new TextView(this);
@@ -2002,12 +2285,24 @@ public class MainActivity extends Activity {
             n.setTextColor(Color.WHITE);
             n.setTextSize(11);
             cell.addView(n);
-            cell.setOnClickListener(v -> canvas.select(idx));
+            cell.setOnClickListener(v -> { if (idx == canvas.current) frameOptions(v, idx); else canvas.select(idx); });
+            if (canvas.layers.get(i).hold > 1) { TextView hb = new TextView(this); hb.setText("×" + canvas.layers.get(i).hold); hb.setTextColor(Ui.ACCENT); hb.setTextSize(11); cell.addView(hb); }
             frames.addView(cell);
         }
         HorizontalScrollView h2 = new HorizontalScrollView(this);
         h2.addView(frames);
         timeline.addView(h2);
+    }
+
+    /** Tap the selected frame: hold duration, duplicate, delete (like Procreate's frame options). */
+    private void frameOptions(View anchor, int idx) {
+        CanvasView.Layer l = canvas.layers.get(idx);
+        Ui.Pop pop = new Ui.Pop(this, 280);
+        pop.title("Frame " + (idx - canvas.firstFrame() + 1));
+        pop.add(slider("Hold duration", l.hold, 1, 12, v -> { l.hold = v; refreshTimeline(); }));
+        pop.item("Duplicate frame", true, () -> { canvas.select(idx); if (!canvas.duplicate()) full(); });
+        pop.item("Delete frame", canvas.layers.size() > 1, () -> { canvas.select(idx); canvas.deleteLayer(); });
+        pop.show(anchor);
     }
 
     private void animSettings() {
@@ -2033,6 +2328,15 @@ public class MainActivity extends Activity {
         op.setMax(100);
         op.setProgress(Math.round(canvas.onionOpacity * 100));
         box.addView(op);
+        LinearLayout modes = barRow();
+        int[] mode = {animMode};
+        String[] mn = {"Loop", "Ping-pong", "One shot"};
+        TextView[] mc = new TextView[3];
+        for (int i = 0; i < 3; i++) {
+            int k = i;
+            mc[i] = chip(modes, mn[i], animMode == i, v -> { mode[0] = k; for (int j = 0; j < 3; j++) { mc[j].setBackgroundColor(j == k ? Ui.ACCENT : 0); } });
+        }
+        box.addView(modes);
         android.widget.CheckBox bgc = new android.widget.CheckBox(this);
         bgc.setText("First layer is a background (shown on every frame)");
         bgc.setChecked(canvas.animBackground);
@@ -2051,6 +2355,7 @@ public class MainActivity extends Activity {
                     canvas.onion = on.getProgress();
                     canvas.onionOpacity = op.getProgress() / 100f;
                     canvas.animBackground = bgc.isChecked();
+                    animMode = mode[0];
                     canvas.invalidate();
                     refreshTimeline();
                 }).show();
@@ -2068,12 +2373,13 @@ public class MainActivity extends Activity {
         // render frames now (UI thread owns the layers), encode in the background
         Bitmap[] fr = new Bitmap[n];
         for (int i = 0; i < n; i++) fr[i] = canvas.renderFrame(f0 + i, w, h);
+        java.util.List<Integer> seq = animSequence();
         toast("Exporting animation…");
         new Thread(() -> {
             String msg = "Animation saved";
             Video.Frames frames = new Video.Frames() {
-                public int count() { return gif ? n : Math.max(n, n * Math.max(1, 2 * fps / n)); } // MP4: loop to ~2 s minimum
-                public Bitmap get(int i) { return fr[i % n].copy(Bitmap.Config.ARGB_8888, false); }
+                public int count() { return gif ? seq.size() : Math.max(seq.size(), seq.size() * Math.max(1, 2 * fps / Math.max(1, seq.size()))); } // MP4: ~2 s minimum
+                public Bitmap get(int i) { return fr[seq.get(i % seq.size()) - f0].copy(Bitmap.Config.ARGB_8888, false); }
             };
             try {
                 if (gif) try (OutputStream o = getContentResolver().openOutputStream(uri, "wt")) { Video.gif(o, w, h, fps, frames); }
@@ -2325,6 +2631,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_CAMERA) {
+            if (res == RESULT_OK && photoUri != null) load(photoUri, true);
+            else if (photoUri != null) try { getContentResolver().delete(photoUri, null, null); } catch (Exception ignored) { }
+            return;
+        }
         if (res != RESULT_OK || data == null || data.getData() == null) return;
         if (req == REQ_EXPORT) export(data.getData(), exportFormat);
         else if (req == REQ_OPEN) load(data.getData(), false);
@@ -2362,7 +2673,58 @@ public class MainActivity extends Activity {
 
     private File guideFile(String id) { return new File(gdir, id + ".guide"); }
 
+    private File textFile(String id) { return new File(gdir, id + ".text"); }
+    private File animFile(String id) { return new File(gdir, id + ".anim"); }
+
+    private static String esc(String t) { return t.replace("\\", "\\\\").replace("\n", "\\n").replace("|", "\\p"); }
+    private static String unesc(String t) { return t.replace("\\p", "|").replace("\\n", "\n").replace("\\\\", "\\"); }
+
+    /** Editable text and animation settings live beside the PSD. */
+    private void saveExtras() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < canvas.layers.size(); i++) {
+            CanvasView.TextInfo t = canvas.layers.get(i).text;
+            if (t != null) sb.append(i).append('|').append(esc(t.text)).append('|').append(t.size).append('|').append(t.bold)
+                    .append('|').append(t.align).append('|').append(t.font).append('|').append(t.grey).append('\n');
+        }
+        writeText(textFile(curId), sb.toString());
+        StringBuilder a = new StringBuilder();
+        a.append(canvas.fps).append(',').append(canvas.onion).append(',').append(canvas.onionOpacity).append(',')
+         .append(canvas.animBackground).append(',').append(animMode).append(',').append(canvas.anim);
+        for (CanvasView.Layer l : canvas.layers) a.append(',').append(l.hold);
+        writeText(animFile(curId), a.toString());
+    }
+
+    private void loadExtras() {
+        for (CanvasView.Layer l : canvas.layers) { l.text = null; l.hold = 1; }
+        try {
+            for (String line : readText(textFile(curId)).split("\n")) {
+                String[] f = line.split("\\|", -1);
+                if (f.length < 7) continue;
+                int i = Integer.parseInt(f[0]);
+                if (i < canvas.layers.size())
+                    canvas.layers.get(i).text = new CanvasView.TextInfo(unesc(f[1]), Float.parseFloat(f[2]), Boolean.parseBoolean(f[3]),
+                            Integer.parseInt(f[4]), f[5], Integer.parseInt(f[6]));
+            }
+        } catch (Exception ignored) { }
+        try {
+            String[] f = readText(animFile(curId)).trim().split(",");
+            canvas.fps = Integer.parseInt(f[0]); canvas.onion = Integer.parseInt(f[1]); canvas.onionOpacity = Float.parseFloat(f[2]);
+            canvas.animBackground = Boolean.parseBoolean(f[3]); animMode = Integer.parseInt(f[4]);
+            boolean on = Boolean.parseBoolean(f[5]);
+            for (int i = 6; i < f.length && i - 6 < canvas.layers.size(); i++) canvas.layers.get(i - 6).hold = Integer.parseInt(f[i]);
+            if (on != canvas.anim) toggleAnimation();
+        } catch (Exception ignored) { if (canvas.anim) toggleAnimation(); }
+    }
+
+    private void writeText(File f, String t) {
+        try (FileOutputStream o = new FileOutputStream(f)) { o.write(t.getBytes("UTF-8")); } catch (Exception ignored) { }
+    }
+
+    private String readText(File f) throws Exception { return new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8"); }
+
     private void saveBackground() {
+        saveExtras();
         try (FileOutputStream o = new FileOutputStream(bgFile(curId))) { o.write((canvas.bgGrey + "," + canvas.bgVisible).getBytes("UTF-8")); }
         catch (Exception ignored) { }
         try (FileOutputStream o = new FileOutputStream(guideFile(curId))) { o.write(canvas.guideState().getBytes("UTF-8")); }
@@ -2377,6 +2739,7 @@ public class MainActivity extends Activity {
             canvas.bgGrey = Integer.parseInt(v[0]);
             canvas.bgVisible = Boolean.parseBoolean(v[1]);
         } catch (Exception ignored) { }
+        loadExtras();
         canvas.guide = 0; canvas.assist = false; canvas.editGuide = false;
         try { canvas.setGuideState(new String(java.nio.file.Files.readAllBytes(guideFile(curId).toPath()), "UTF-8")); }
         catch (Exception ignored) { }
@@ -2400,6 +2763,7 @@ public class MainActivity extends Activity {
         canvas.commitMove();
         Bitmap flat = canvas.flatten();
         Bitmap thumb = canvas.renderSmall(420);
+        Bitmap prev = canvas.renderSmall(1600);
         java.util.List<CanvasView.Layer> layers = new java.util.ArrayList<>(canvas.layers);
         java.util.Map<Integer, CanvasView.Group> groups = new java.util.HashMap<>(canvas.groups);
         int w = canvas.docW, h = canvas.docH;
@@ -2413,9 +2777,12 @@ public class MainActivity extends Activity {
                 } catch (Throwable ignored) { }
                 try (OutputStream o = new FileOutputStream(thumbFile(id))) { thumb.compress(Bitmap.CompressFormat.PNG, 100, o); }
                 catch (Throwable ignored) { }
+                try (OutputStream o = new FileOutputStream(previewFile(id))) { prev.compress(Bitmap.CompressFormat.JPEG, 88, o); }
+                catch (Throwable ignored) { }
             }
             flat.recycle();
             thumb.recycle();
+            prev.recycle();
             if (done != null) runOnUiThread(done);
         }).start();
     }
@@ -2454,6 +2821,7 @@ public class MainActivity extends Activity {
             sv.addView(galleryGrid);
             col.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
             gallery.addView(col);
+            Ui.lighten(gallery);
             shell.addView(gallery);
         }
         gallery.setVisibility(View.VISIBLE);
@@ -2462,24 +2830,114 @@ public class MainActivity extends Activity {
         fillGallery();
     }
 
-    private void fillGallery() {
-        if (galleryGrid == null) return;
-        galleryGrid.removeAllViews();
+    private File previewFile(String id) { return new File(gdir, id + ".prev.jpg"); }
+    private File stacksFile() { return new File(gdir, "stacks.txt"); }
+    private File orderFile() { return new File(gdir, "order.txt"); }
+    private String openStack;                         // stack being viewed, null = top level
+    private boolean selectMode;
+    private final java.util.LinkedHashSet<String> picked = new java.util.LinkedHashSet<>();
+
+    private java.util.Map<String, String> stacks() {
+        java.util.Map<String, String> m = new java.util.LinkedHashMap<>();
+        try { for (String line : readText(stacksFile()).split("\n")) { int k = line.indexOf('='); if (k > 0) m.put(line.substring(0, k), line.substring(k + 1)); } }
+        catch (Exception ignored) { }
+        return m;
+    }
+
+    private void saveStacks(java.util.Map<String, String> m) {
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<String, String> e : m.entrySet()) sb.append(e.getKey()).append('=').append(e.getValue()).append('\n');
+        writeText(stacksFile(), sb.toString());
+    }
+
+    /** Drawing ids in gallery order: custom order first (drag to reorder), then newest. */
+    private java.util.List<String> orderedIds() {
         File[] docs = gdir.listFiles((d, n) -> n.endsWith(".psd"));
         if (docs == null) docs = new File[0];
         java.util.Arrays.sort(docs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        java.util.List<String> all = new java.util.ArrayList<>();
+        for (File f : docs) all.add(f.getName().replace(".psd", ""));
+        java.util.List<String> out = new java.util.ArrayList<>();
+        try { for (String id : readText(orderFile()).split("\n")) if (all.contains(id) && !out.contains(id)) out.add(id); } catch (Exception ignored) { }
+        for (String id : all) if (!out.contains(id)) out.add(0, id); // new drawings first
+        return out;
+    }
+
+    private void moveInOrder(String id, String beforeId) {
+        java.util.List<String> o = orderedIds();
+        o.remove(id);
+        int at = beforeId == null ? o.size() : Math.max(0, o.indexOf(beforeId));
+        o.add(at, id);
+        writeText(orderFile(), String.join("\n", o));
+    }
+
+    private void fillGallery() {
+        if (galleryGrid == null) return;
+        galleryGrid.removeAllViews();
+        java.util.Map<String, String> st = stacks();
+        java.util.List<String> ids = orderedIds();
+        LinearLayout bar2 = barRow(); // stack title / select actions
+        if (openStack != null) chip(bar2, "‹ Gallery   " + openStack, false, v -> { openStack = null; fillGallery(); });
+        chip(bar2, selectMode ? "Done" : "Select", selectMode, v -> { selectMode = !selectMode; picked.clear(); fillGallery(); });
+        if (selectMode && !picked.isEmpty()) {
+            chip(bar2, "Stack", false, v -> stackDialog(new java.util.ArrayList<>(picked)));
+            if (openStack != null) chip(bar2, "Unstack", false, v -> { java.util.Map<String, String> m = stacks(); for (String id : picked) m.remove(id); saveStacks(m); picked.clear(); fillGallery(); });
+            chip(bar2, "Duplicate", false, v -> { for (String id : picked) duplicateItem(id); picked.clear(); fillGallery(); });
+            chip(bar2, "Delete", false, v -> confirm("Delete " + picked.size() + " drawings? This can't be undone.", () -> { for (String id : new java.util.ArrayList<>(picked)) deleteItem(id); picked.clear(); fillGallery(); }));
+        }
+        galleryGrid.addView(bar2);
+        // what to show: drawings in this stack, or top level = unstacked drawings + one card per stack
+        java.util.List<Object> cards = new java.util.ArrayList<>();
+        java.util.Set<String> seenStacks = new java.util.HashSet<>();
+        for (String id : ids) {
+            String sk = st.get(id);
+            if (openStack != null) { if (openStack.equals(sk)) cards.add(id); }
+            else if (sk == null) cards.add(id);
+            else if (seenStacks.add(sk)) cards.add(new String[]{sk, id});
+        }
+        File[] docs = new File[0];
         int cols = Math.max(2, (int) (getResources().getDisplayMetrics().widthPixels / dp / 190));
         int cw = (int) ((getResources().getDisplayMetrics().widthPixels - 16 * dp) / cols);
         LinearLayout row = null;
-        for (int i = 0; i < docs.length; i++) {
+        for (int i = 0; i < cards.size(); i++) {
             if (i % cols == 0) { row = new LinearLayout(this); galleryGrid.addView(row); }
-            String id = docs[i].getName().replace(".psd", "");
+            if (cards.get(i) instanceof String[]) { // a stack
+                String[] sk = (String[]) cards.get(i);
+                int count = 0;
+                for (String v : st.values()) if (v.equals(sk[0])) count++;
+                LinearLayout card = new LinearLayout(this);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setPadding((int) (6 * dp), (int) (8 * dp), (int) (6 * dp), (int) (4 * dp));
+                ImageView iv = new ImageView(this);
+                Ui.lighten(iv);
+                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                iv.setBackgroundColor(0xFF48484A);
+                iv.setPadding(10, 10, 10, 10);
+                Bitmap tb = android.graphics.BitmapFactory.decodeFile(thumbFile(sk[1]).getPath());
+                if (tb != null) iv.setImageBitmap(tb);
+                card.addView(iv, new LinearLayout.LayoutParams(-1, (int) (cw * 1.1f)));
+                TextView nm = new TextView(this);
+                nm.setText("▤ " + sk[0]);
+                nm.setTextColor(Color.WHITE);
+                card.addView(nm);
+                TextView c2 = new TextView(this);
+                c2.setText(count + " drawings");
+                c2.setTextColor(0xFF8E8E93);
+                c2.setTextSize(12);
+                card.addView(c2);
+                card.setOnClickListener(v -> { openStack = sk[0]; fillGallery(); });
+                row.addView(card, new LinearLayout.LayoutParams(cw, -2));
+                continue;
+            }
+            String id = (String) cards.get(i);
+            File docFileI = docFile(id);
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
             card.setPadding((int) (6 * dp), (int) (8 * dp), (int) (6 * dp), (int) (4 * dp));
             ImageView iv = new ImageView(this);
+            Ui.lighten(iv);
             iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            iv.setBackgroundColor(id.equals(curId) ? Ui.ACCENT : 0xFF2C2C2E);
+            iv.setBackgroundColor(picked.contains(id) ? 0xFF34C759 : id.equals(curId) ? Ui.ACCENT : 0xFF2C2C2E);
             iv.setPadding(3, 3, 3, 3);
             Bitmap tb = android.graphics.BitmapFactory.decodeFile(thumbFile(id).getPath());
             if (tb != null) iv.setImageBitmap(tb);
@@ -2489,22 +2947,162 @@ public class MainActivity extends Activity {
             nm.setTextColor(Color.WHITE);
             nm.setSingleLine(true);
             nm.setPadding(0, (int) (4 * dp), 0, 0);
+            nm.setOnClickListener(v -> { if (!selectMode) renameItem(id); else togglePick(id); }); // tap the title to rename
             card.addView(nm);
             TextView sz = new TextView(this);
-            sz.setText(tb == null ? "" : new java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.getDefault()).format(new java.util.Date(docs[i].lastModified())));
+            sz.setText(tb == null ? "" : new java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.getDefault()).format(new java.util.Date(docFileI.lastModified())));
             sz.setTextColor(0xFF8E8E93);
             sz.setTextSize(12);
             card.addView(sz);
-            card.setOnClickListener(v -> openGalleryItem(id));
-            card.setOnLongClickListener(v -> { galleryItemMenu(v, id); return true; });
+            card.setOnClickListener(v -> { if (selectMode) togglePick(id); else openGalleryItem(id); });
+            card.setTag(id);
+            card.setOnTouchListener(cardGestures(card, id));
             row.addView(card, new LinearLayout.LayoutParams(cw, -2));
         }
-        if (docs.length == 0) {
+        if (cards.isEmpty()) {
             TextView e = new TextView(this);
             e.setText("No drawings yet. Tap ＋ New.");
             e.setTextColor(0xFF8E8E93);
             e.setPadding((int) (8 * dp), (int) (24 * dp), 0, 0);
             galleryGrid.addView(e);
+        }
+    }
+
+    private void togglePick(String id) { if (!picked.remove(id)) picked.add(id); fillGallery(); }
+
+    /** Gallery card: long-press then drag to reorder; long-press alone for the menu; pinch out to preview. */
+    private View.OnTouchListener cardGestures(View card, String id) {
+        float[] st = new float[4]; // downX, downY, mode (0 none, 1 armed, 2 dragging), pinch start
+        Runnable arm = () -> { st[2] = 1; card.animate().scaleX(1.05f).scaleY(1.05f).setDuration(120).start(); };
+        return (v, e) -> {
+            switch (e.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    st[0] = e.getRawX(); st[1] = e.getRawY(); st[2] = 0;
+                    card.postDelayed(arm, 420);
+                    return false;
+                case android.view.MotionEvent.ACTION_POINTER_DOWN:
+                    card.removeCallbacks(arm);
+                    st[3] = (float) Math.hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0));
+                    return true;
+                case android.view.MotionEvent.ACTION_MOVE: {
+                    if (e.getPointerCount() >= 2 && st[3] > 0) { // pinch out: preview
+                        float d = (float) Math.hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0));
+                        if (d > st[3] * 1.4f) { st[3] = 0; showPreview(id); }
+                        return true;
+                    }
+                    float dx = e.getRawX() - st[0], dy = e.getRawY() - st[1];
+                    if (st[2] == 0 && Math.hypot(dx, dy) > 12 * dp) card.removeCallbacks(arm);
+                    if (st[2] >= 1 && Math.hypot(dx, dy) > 12 * dp) {
+                        st[2] = 2;
+                        card.getParent().requestDisallowInterceptTouchEvent(true);
+                        card.setTranslationX(dx); card.setTranslationY(dy);
+                        card.setElevation(16 * dp);
+                        return true;
+                    }
+                    return st[2] == 2;
+                }
+                default:
+                    card.removeCallbacks(arm);
+                    card.animate().scaleX(1f).scaleY(1f).setDuration(100).start();
+                    if (st[2] == 2) { // drop before the card under the finger
+                        String target = cardAt(e.getRawX(), e.getRawY(), card);
+                        card.setTranslationX(0); card.setTranslationY(0); card.setElevation(0);
+                        if (target != null) { moveInOrder(id, target); fillGallery(); }
+                        return true;
+                    }
+                    if (st[2] == 1 && e.getActionMasked() == android.view.MotionEvent.ACTION_UP) { galleryItemMenu(card, id); return true; }
+                    return false;
+            }
+        };
+    }
+
+    private String cardAt(float rx, float ry, View except) {
+        for (int r = 0; r < galleryGrid.getChildCount(); r++) {
+            View row = galleryGrid.getChildAt(r);
+            if (!(row instanceof LinearLayout)) continue;
+            LinearLayout lr = (LinearLayout) row;
+            for (int c = 0; c < lr.getChildCount(); c++) {
+                View ch = lr.getChildAt(c);
+                if (ch == except || !(ch.getTag() instanceof String)) continue;
+                int[] loc = new int[2];
+                ch.getLocationOnScreen(loc);
+                if (rx >= loc[0] && rx < loc[0] + ch.getWidth() && ry >= loc[1] && ry < loc[1] + ch.getHeight()) return (String) ch.getTag();
+            }
+        }
+        return null;
+    }
+
+    /** Full-screen look at a drawing (pinch a gallery card, like Procreate). Tap to close. */
+    private void showPreview(String id) {
+        File f = previewFile(id).exists() ? previewFile(id) : thumbFile(id);
+        Bitmap b = android.graphics.BitmapFactory.decodeFile(f.getPath());
+        if (b == null) return;
+        FrameLayout ov = new FrameLayout(this);
+        ov.setBackgroundColor(0xF0000000);
+        ImageView iv = new ImageView(this);
+        iv.setImageBitmap(b);
+        iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        ov.addView(iv, new FrameLayout.LayoutParams(-1, -1));
+        TextView t = new TextView(this);
+        t.setText(nameOf(id) + "   ·   tap to close");
+        t.setTextColor(Color.WHITE);
+        t.setPadding((int) (16 * dp), (int) (16 * dp), 0, 0);
+        ov.addView(t);
+        ov.setOnClickListener(v -> shell.removeView(ov));
+        shell.addView(ov);
+    }
+
+    private void renameItem(String id) {
+        android.widget.EditText et = new android.widget.EditText(this);
+        et.setText(nameOf(id));
+        et.setSelectAllOnFocus(true);
+        new AlertDialog.Builder(this).setTitle("Rename").setView(et)
+                .setPositiveButton("OK", (d, w) -> { setName(id, et.getText().toString()); fillGallery(); }).show();
+    }
+
+    private void stackDialog(java.util.List<String> ids) {
+        java.util.Map<String, String> m = stacks();
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>(m.values());
+        Ui.Pop pop = new Ui.Pop(this, 260);
+        pop.title("Move to stack");
+        for (String n : names) pop.item(n, true, () -> { for (String id : ids) m.put(id, n); saveStacks(m); picked.clear(); selectMode = false; fillGallery(); });
+        pop.item("＋ New stack…", true, () -> {
+            android.widget.EditText et = new android.widget.EditText(this);
+            et.setText("Stack");
+            new AlertDialog.Builder(this).setTitle("New stack").setView(et).setPositiveButton("OK", (d, w) -> {
+                for (String id : ids) m.put(id, et.getText().toString().trim().isEmpty() ? "Stack" : et.getText().toString().trim());
+                saveStacks(m); picked.clear(); selectMode = false; fillGallery();
+            }).show();
+        });
+        pop.show(galleryGrid);
+    }
+
+    private void duplicateItem(String id) {
+        String nid = newId() + (int) (Math.random() * 1000);
+        try {
+            java.nio.file.Files.copy(docFile(id).toPath(), docFile(nid).toPath());
+            for (File[] pair : new File[][]{{thumbFile(id), thumbFile(nid)}, {bgFile(id), bgFile(nid)}, {guideFile(id), guideFile(nid)},
+                    {textFile(id), textFile(nid)}, {animFile(id), animFile(nid)}, {previewFile(id), previewFile(nid)}})
+                if (pair[0].exists()) java.nio.file.Files.copy(pair[0].toPath(), pair[1].toPath());
+            setName(nid, nameOf(id) + " copy");
+            java.util.Map<String, String> m = stacks();
+            if (m.containsKey(id)) { m.put(nid, m.get(id)); saveStacks(m); }
+        } catch (Exception e) { toast("Could not duplicate"); }
+    }
+
+    private void deleteItem(String id) {
+        for (File f : new File[]{docFile(id), thumbFile(id), nameFile(id), selFile(id), bgFile(id), guideFile(id), textFile(id), animFile(id), previewFile(id)}) f.delete();
+        File[] tl = tlDir(id).listFiles();
+        if (tl != null) for (File f : tl) f.delete();
+        tlDir(id).delete();
+        java.util.Map<String, String> m = stacks();
+        if (m.remove(id) != null) saveStacks(m);
+        if (id.equals(curId)) {
+            Rect scr = screenBounds();
+            curId = newId();
+            prefs.edit().putString("cur", curId).apply();
+            newDocument(Math.min(scr.width(), scr.height()), Math.max(scr.width(), scr.height()));
+            savedSel.clear();
         }
     }
 
@@ -2566,6 +3164,9 @@ public class MainActivity extends Activity {
         m.getMenu().add(0, 1, 0, "Rename");
         m.getMenu().add(0, 2, 1, "Duplicate");
         m.getMenu().add(0, 3, 2, "Delete");
+        m.getMenu().add(0, 4, 3, "Move to stack…");
+        if (stacks().containsKey(id)) m.getMenu().add(0, 5, 4, "Remove from stack");
+        m.getMenu().add(0, 6, 5, "Preview");
         m.setOnMenuItemClickListener(it -> {
             switch (it.getItemId()) {
                 case 1: {
@@ -2587,9 +3188,12 @@ public class MainActivity extends Activity {
                     fillGallery();
                     break;
                 }
+                case 4: stackDialog(java.util.Collections.singletonList(id)); break;
+                case 5: { java.util.Map<String, String> mm2 = stacks(); mm2.remove(id); saveStacks(mm2); fillGallery(); break; }
+                case 6: showPreview(id); break;
                 case 3:
                     confirm("Delete \"" + nameOf(id) + "\"? This can't be undone.", () -> {
-                        for (File f : new File[]{docFile(id), thumbFile(id), nameFile(id), selFile(id), bgFile(id), guideFile(id)}) f.delete();
+                        for (File f : new File[]{docFile(id), thumbFile(id), nameFile(id), selFile(id), bgFile(id), guideFile(id), textFile(id), animFile(id), previewFile(id)}) f.delete();
                         File[] tl = tlDir(id).listFiles();
                         if (tl != null) for (File f : tl) f.delete();
                         tlDir(id).delete();

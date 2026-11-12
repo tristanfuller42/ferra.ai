@@ -11,6 +11,23 @@ import android.view.View;
 
 /** Tiny hand-drawn UI pieces: icon buttons and a vertical slider. No image assets. */
 final class Ui {
+    static boolean light; // light interface (applied as a hue-keeping invert of the UI chrome)
+
+    /** Turns the dark UI light while keeping the blue accent blue; applying it twice cancels out. */
+    static Paint lightPaint() {
+        android.graphics.ColorMatrix inv = new android.graphics.ColorMatrix(new float[]{
+                -1, 0, 0, 0, 255, 0, -1, 0, 0, 255, 0, 0, -1, 0, 255, 0, 0, 0, 1, 0});
+        android.graphics.ColorMatrix hue = new android.graphics.ColorMatrix(new float[]{
+                -0.574f, 1.43f, 0.144f, 0, 0, 0.426f, 0.43f, 0.144f, 0, 0, 0.426f, 1.43f, -0.856f, 0, 0, 0, 0, 0, 1, 0});
+        inv.postConcat(hue);
+        Paint p = new Paint();
+        p.setColorFilter(new android.graphics.ColorMatrixColorFilter(inv));
+        return p;
+    }
+
+    /** Light mode: invert a piece of UI chrome (call again on artwork inside it to show true greys). */
+    static void lighten(View v) { if (light) v.setLayerType(View.LAYER_TYPE_HARDWARE, lightPaint()); }
+
     static final int BAR = 0xFF1C1C1E, PANEL = 0xFF3A3A3C, ACCENT = 0xFF3D9BFF, ICON = 0xFFE8E8E8;
 
     static final int MENU = 0, MOVE = 1, BRUSH = 2, ERASER = 3, LAYERS = 4, UNDO = 5, REDO = 6, PICK = 7, COLOR = 8, ADJUST = 9, SELECT = 10, SMUDGE = 11;
@@ -272,6 +289,7 @@ final class Ui {
             win.setBackgroundDrawable(bg);
             win.setElevation(18 * dp);
             win.setOutsideTouchable(true);
+            lighten(sv);
             latest = this;
         }
 
