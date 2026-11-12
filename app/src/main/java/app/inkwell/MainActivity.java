@@ -369,7 +369,10 @@ public class MainActivity extends Activity {
     }
 
     /** New drawing or resize, with size presets. */
-    private void canvasDialog() {
+    private void canvasDialog() { canvasDialog(false); }
+
+    /** Canvas size: forNew = make a new drawing in the Gallery (Create); otherwise resize this one (Resize, undoable). */
+    private void canvasDialog(boolean forNew) {
         Rect scr = screenBounds();
         int sw = Math.min(scr.width(), scr.height()), sh = Math.max(scr.width(), scr.height());
         Object[][] presets = {
@@ -485,30 +488,23 @@ public class MainActivity extends Activity {
             box.addView(t);
         }
         android.widget.CheckBox scale = new android.widget.CheckBox(this);
-        scale.setText("When resizing: scale artwork to fit (off = crop/extend around centre)");
+        scale.setText("Scale artwork to fit (off = crop/extend around centre)");
         scale.setChecked(true);
-        box.addView(scale);
+        if (!forNew) box.addView(scale);
 
         ScrollView sv = new ScrollView(this);
         sv.addView(box);
-        AlertDialog d = new AlertDialog.Builder(this).setTitle("Canvas size").setView(sv)
-                .setPositiveButton("New drawing", null)
-                .setNeutralButton("Resize current", null)
+        AlertDialog d = new AlertDialog.Builder(this).setTitle(forNew ? "New canvas" : "Canvas size").setView(sv)
+                .setPositiveButton(forNew ? "Create" : "Resize", null)
                 .setNegativeButton("Cancel", null).show();
         d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             int w = px.applyAsInt(wIn), h = px.applyAsInt(hIn);
             if (!valid(w, h)) return;
             prefs.edit().putInt("dpi", Math.max(1, parse(dpiIn))).apply();
-            d.dismiss();
-            confirm("Start a new " + w + " × " + h + " drawing? The current one is replaced.", () -> newDocument(w, h));
-        });
-        d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
-            int w = px.applyAsInt(wIn), h = px.applyAsInt(hIn);
-            if (!valid(w, h)) return;
-            prefs.edit().putInt("dpi", Math.max(1, parse(dpiIn))).apply();
+            if (forNew) { d.dismiss(); saveCurrent(null); newGalleryItem(w, h); return; } // a new drawing in the Gallery, like Procreate
             if ((long) layerCap(w, h) < canvas.layers.size()) { toast("Too many layers for that size"); return; }
             d.dismiss();
-            confirm("Resize to " + w + " × " + h + "? Undo history is cleared.", () -> canvas.resizeDocument(w, h, scale.isChecked()));
+            canvas.resizeDocument(w, h, scale.isChecked()); // undoable
         });
     }
 
@@ -522,6 +518,14 @@ public class MainActivity extends Activity {
 
     private static int parse(android.widget.EditText e) {
         try { return Integer.parseInt(e.getText().toString().trim()); } catch (Exception x) { return 0; }
+    }
+
+    /** Closes modes that live in the bottom bar (guide editing, "Continue filling") so touches draw again. */
+    private void endBarModes() {
+        boolean was = canvas.editGuide || canvas.fillMode;
+        canvas.editGuide = false;
+        canvas.fillMode = false;
+        if (was) { canvas.invalidate(); if (bottom != null) bottom.setVisibility(View.GONE); }
     }
 
     /** Crop & resize like Procreate: drag the box on the canvas; rotate; exact numbers under Settings. */
@@ -564,7 +568,8 @@ public class MainActivity extends Activity {
             int w = Math.round(canvas.crop.width()), h = Math.round(canvas.crop.height());
             if (!valid(w, h)) return;
             if ((long) layerCap(w, h) < canvas.layers.size()) { toast("Too many layers for that size"); return; }
-            confirm("Crop to " + w + " × " + h + "? Undo history is cleared.", () -> { canvas.applyCrop(); bottom.setVisibility(View.GONE); });
+            canvas.applyCrop(); // undoable, like Procreate
+            bottom.setVisibility(View.GONE);
         });
         showBar(a, b);
     }
@@ -610,6 +615,7 @@ public class MainActivity extends Activity {
 
     private void setTool(int t) {
         if (canvas.cropping) canvas.cancelCrop(); // picking a tool leaves Crop without changing anything
+        endBarModes();
         if (canvas.tool == CanvasView.SELECT && t != CanvasView.SELECT) canvas.closePolygon();
         if (canvas.adjusting()) finishAdjust(true);      // like Procreate: picking another tool applies
         if (canvas.liquifying()) { canvas.endLiquify(true); }
@@ -1055,7 +1061,7 @@ public class MainActivity extends Activity {
                 case 7: canvas.toggleClip(idx); break;
                 case 8: canvas.invertLayer(); break;
                 case 9: canvas.mergeDown(); break;
-                case 11: confirm("Delete this layer?", canvas::deleteLayer); break;
+                case 11: canvas.deleteLayer(); break; // undoable, so no question (like Procreate)
                 case 20: canvas.addMask(); toast("Mask added: paint black to hide, white to show"); break;
                 case 21: canvas.editMask(!l.editMask); break;
                 case 22: canvas.applyMask(); break;
@@ -1177,7 +1183,7 @@ public class MainActivity extends Activity {
                     if (editing != null) { canvas.editText(editing, ti); return; }
                     if (!canvas.addTextLayer(ti)) { full(); return; }
                     setTool(CanvasView.MOVE);
-                    toast("Text added. Drag to place it, then tap Done. Edit it later from layer options.");
+                    hud("Drag to place the text, then tap Done");
                 })
                 .setNegativeButton("Cancel", null).show();
     }
@@ -1263,31 +1269,35 @@ public class MainActivity extends Activity {
         manyIds = null;
     }
 
-    /** Share sheet with several drawings as PNG (saved to Pictures/Inkwell so other apps can read them). */
+    /** Share sheet with several drawings as PNG (from the app's own share folder; nothing is added to Photos). */
     private void shareMany(java.util.List<String> ids) {
         toast("Preparing " + ids.size() + " drawings…");
         saveCurrent(() -> new Thread(() -> {
             java.util.ArrayList<Uri> uris = new java.util.ArrayList<>();
+            File d = Files.dir(this);
+            File[] old = d.listFiles();
+            if (old != null) for (File f : old) f.delete();
             try {
+                java.util.Set<String> used = new java.util.HashSet<>();
                 for (String id : ids) {
-                    android.content.ContentValues cv = new android.content.ContentValues();
-                    cv.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, fileNameOf(id, "png"));
-                    cv.put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png");
-                    cv.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Inkwell");
-                    Uri u = getContentResolver().insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
-                    if (u == null) continue;
-                    try (OutputStream o = getContentResolver().openOutputStream(u)) {
+                    String nm = fileNameOf(id, "png");
+                    for (int k = 2; !used.add(nm); k++) nm = fileNameOf(id, "").replaceAll("\\.$", "") + " " + k + ".png";
+                    File f = new File(d, nm);
+                    try (OutputStream o = new FileOutputStream(f)) {
                         Bitmap b = compositeOf(id);
                         b.compress(Bitmap.CompressFormat.PNG, 100, o);
                         b.recycle();
                     }
-                    uris.add(u);
+                    uris.add(Files.uri(f));
                 }
             } catch (Throwable t) { runOnUiThread(() -> toast("Could not prepare: " + t.getMessage())); }
             if (uris.isEmpty()) return;
             runOnUiThread(() -> {
                 Intent i = new Intent(uris.size() == 1 ? Intent.ACTION_SEND : Intent.ACTION_SEND_MULTIPLE).setType("image/png")
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                android.content.ClipData cd = android.content.ClipData.newRawUri("", uris.get(0));
+                for (int k = 1; k < uris.size(); k++) cd.addItem(new android.content.ClipData.Item(uris.get(k)));
+                i.setClipData(cd);
                 if (uris.size() == 1) i.putExtra(Intent.EXTRA_STREAM, uris.get(0)); else i.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
                 try { startActivity(Intent.createChooser(i, "Share drawings")); } catch (Exception e) { toast("No app to share with"); }
             });
@@ -1520,7 +1530,13 @@ public class MainActivity extends Activity {
                 break;
             case 2: // Share
                 pop.section("Share image");
-                for (int i = FORMATS.length - 1; i >= 0; i--) { int f = i; pop.item(FORMATS[i].replace(" (layers)", ""), true, () -> startExport(f)); }
+                for (int i = FORMATS.length - 1; i >= 0; i--) { int f = i; pop.item(FORMATS[i].replace(" (layers)", ""), true, () -> shareAs(f)); }
+                pop.section("Save to Files");
+                LinearLayout sv = barRow();
+                for (int i = 0; i < FORMATS.length; i++) { int f = i; chip(sv, FORMATS[i].replace(" (layers)", ""), false, v -> { pop.win.dismiss(); startExport(f); }); }
+                HorizontalScrollView svs = new HorizontalScrollView(this);
+                svs.addView(sv);
+                pop.add(svs);
                 pop.section("Share layers");
                 pop.item("PNG files (each layer)", true, () -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_LAYERS_TREE));
                 pop.item("Animated GIF", true, () -> exportAnimRequest(true));
@@ -2493,7 +2509,7 @@ public class MainActivity extends Activity {
             t.setTextColor(Color.WHITE);
             mb.addView(t);
             chip(mb, "Group", false, v -> { canvas.groupLayers(new java.util.ArrayList<>(multi)); multi.clear(); refreshPanel(); });
-            chip(mb, "Delete", false, v -> confirm("Delete " + multi.size() + " layers?", () -> { canvas.deleteLayers(new java.util.ArrayList<>(multi)); multi.clear(); refreshPanel(); }));
+            chip(mb, "Delete", false, v -> { canvas.deleteLayers(new java.util.ArrayList<>(multi)); multi.clear(); refreshPanel(); }); // undoable
             chip(mb, "Clear", false, v -> { multi.clear(); refreshPanel(); });
             layerList.addView(mb, 0);
         }
@@ -2944,10 +2960,11 @@ public class MainActivity extends Activity {
 
     /** Page Assist (like Procreate): each layer is a page; flip through them; export all as one PDF. */
     private void togglePages() {
+        endBarModes();
         if (canvas.anim) toggleAnimation();
         canvas.pages = !canvas.pages;
         timeline.setVisibility(canvas.pages ? View.VISIBLE : View.GONE);
-        if (canvas.pages) { refreshTimeline(); toast("Page Assist: each layer is a page"); }
+        if (canvas.pages) refreshTimeline();
         canvas.invalidate();
     }
 
@@ -2991,11 +3008,12 @@ public class MainActivity extends Activity {
     }
 
     private void toggleAnimation() {
+        endBarModes();
         if (!canvas.anim && canvas.pages) { canvas.pages = false; }
         canvas.anim = !canvas.anim;
         if (!canvas.anim && canvas.playing) togglePlay();
         timeline.setVisibility(canvas.anim ? View.VISIBLE : View.GONE);
-        if (canvas.anim) { refreshTimeline(); toast("Animation Assist: each layer is a frame"); }
+        if (canvas.anim) refreshTimeline();
         canvas.invalidate();
     }
 
@@ -3518,6 +3536,24 @@ public class MainActivity extends Activity {
         m.show();
     }
 
+    /** Share → a format: makes the file, then opens the share sheet (like Procreate). */
+    private void shareAs(int fmt) {
+        File d = Files.dir(this);
+        File[] old = d.listFiles();
+        if (old != null) for (File f : old) f.delete(); // only the latest shared file is kept
+        File f = new File(d, nameOf(curId).replaceAll("[/\\\\:*?\"<>|]", "_") + "." + EXTS[fmt]);
+        exportDone = () -> {
+            Uri u = Files.uri(f);
+            Intent i = new Intent(Intent.ACTION_SEND).setType(MIMES[fmt]).putExtra(Intent.EXTRA_STREAM, u)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            i.setClipData(android.content.ClipData.newRawUri("", u));
+            try { startActivity(Intent.createChooser(i, "Share")); } catch (Exception e) { toast("No app to share with"); }
+        };
+        export(Uri.fromFile(f), fmt);
+    }
+
+    private Runnable exportDone; // run after the next export finishes (share sheet)
+
     private void export(Uri uri, int fmt) {
         Bitmap flat = canvas.flatten();
         if (!canvas.bgVisible && (fmt == 1 || fmt == 3 || fmt == 4)) { // JPEG/PDF can't be transparent; PSD composite
@@ -3558,7 +3594,12 @@ public class MainActivity extends Activity {
             } catch (Throwable t) { msg = "Save failed: " + t.getMessage(); }
             flatF.recycle();
             String fm = msg;
-            runOnUiThread(() -> toast(fm));
+            boolean ok = !msg.startsWith("Save failed");
+            runOnUiThread(() -> {
+                Runnable then = exportDone;
+                exportDone = null;
+                if (ok && then != null) then.run(); else toast(fm);
+            });
         }).start();
     }
 
@@ -3615,11 +3656,26 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        // Back closes the innermost thing first: Brush Studio, preview, a stack, open panels, a tool mode;
+        // then the canvas goes to the Gallery, and the Gallery leaves the app.
         if (studio != null) { closeStudio(); return; }
+        if (previewOv != null && previewOv.getParent() != null) { shell.removeView(previewOv); previewOv = null; return; }
         if (gallery != null && gallery.getVisibility() == View.VISIBLE) {
-            if (docFile(curId).exists()) gallery.setVisibility(View.GONE); else super.onBackPressed();
-        } else showGallery();
+            if (openStack != null) { openStack = null; fillGallery(); return; }
+            if (selectMode) { selectMode = false; picked.clear(); fillGallery(); return; }
+            moveTaskToBack(true);
+            return;
+        }
+        if (closePanels()) return;
+        if (canvas.cropping) { canvas.cancelCrop(); bottom.setVisibility(View.GONE); return; }
+        if (canvas.editGuide || canvas.fillMode) { endBarModes(); return; }
+        if (canvas.adjusting()) { finishAdjust(false); return; }                 // Back = Cancel for an adjustment
+        if (canvas.liquifying()) { canvas.endLiquify(false); setTool(CanvasView.DRAW); return; }
+        if (canvas.tool != CanvasView.DRAW && canvas.tool != CanvasView.ERASE && canvas.tool != CanvasView.SMUDGE) { setTool(CanvasView.DRAW); return; }
+        showGallery();
     }
+
+    private View previewOv;
 
     private File docFile(String id) { return new File(gdir, id + ".psd"); }
     private File thumbFile(String id) { return new File(gdir, id + ".png"); }
@@ -3632,6 +3688,7 @@ public class MainActivity extends Activity {
 
     private File textFile(String id) { return new File(gdir, id + ".text"); }
     private File animFile(String id) { return new File(gdir, id + ".anim"); }
+    private File flagsFile(String id) { return new File(gdir, id + ".flags"); } // per layer: locked, reference
 
     private static String esc(String t) { return t.replace("\\", "\\\\").replace("\n", "\\n").replace("|", "\\p"); }
     private static String unesc(String t) { return t.replace("\\p", "|").replace("\\n", "\n").replace("\\\\", "\\"); }
@@ -3652,10 +3709,20 @@ public class MainActivity extends Activity {
         for (CanvasView.Layer l : canvas.layers) a.append(',').append(l.hold);
         writeText(animFile(curId), a.toString());
         prefs.edit().putBoolean("pages_" + curId, canvas.pages).apply();
+        StringBuilder fl = new StringBuilder();
+        for (CanvasView.Layer l : canvas.layers) fl.append(l.locked ? 'L' : '-').append(l.reference ? 'R' : '-').append(',');
+        writeText(flagsFile(curId), fl.toString());
     }
 
     private void loadExtras() {
-        for (CanvasView.Layer l : canvas.layers) { l.text = null; l.hold = 1; }
+        for (CanvasView.Layer l : canvas.layers) { l.text = null; l.hold = 1; l.locked = false; l.reference = false; }
+        try {
+            String[] f = readText(flagsFile(curId)).trim().split(",");
+            for (int i = 0; i < f.length && i < canvas.layers.size(); i++) {
+                canvas.layers.get(i).locked = f[i].indexOf('L') >= 0;
+                canvas.layers.get(i).reference = f[i].indexOf('R') >= 0;
+            }
+        } catch (Exception ignored) { }
         try {
             for (String line : readText(textFile(curId)).split("\n")) {
                 String[] f = line.split("\\|", -1);
@@ -4075,6 +4142,7 @@ public class MainActivity extends Activity {
             return true;
         });
         shell.addView(ov);
+        previewOv = ov;
     }
 
     private void renameItem(String id) {
@@ -4107,7 +4175,8 @@ public class MainActivity extends Activity {
         try {
             java.nio.file.Files.copy(docFile(id).toPath(), docFile(nid).toPath());
             for (File[] pair : new File[][]{{thumbFile(id), thumbFile(nid)}, {bgFile(id), bgFile(nid)}, {guideFile(id), guideFile(nid)},
-                    {textFile(id), textFile(nid)}, {animFile(id), animFile(nid)}, {previewFile(id), previewFile(nid)}})
+                    {textFile(id), textFile(nid)}, {animFile(id), animFile(nid)}, {previewFile(id), previewFile(nid)},
+                    {flagsFile(id), flagsFile(nid)}, {selFile(id), selFile(nid)}})
                 if (pair[0].exists()) java.nio.file.Files.copy(pair[0].toPath(), pair[1].toPath());
             setName(nid, nameOf(id) + " copy");
             java.util.Map<String, String> m = stacks();
@@ -4116,10 +4185,11 @@ public class MainActivity extends Activity {
     }
 
     private void deleteItem(String id) {
-        for (File f : new File[]{docFile(id), thumbFile(id), nameFile(id), selFile(id), bgFile(id), guideFile(id), textFile(id), animFile(id), previewFile(id)}) f.delete();
+        for (File f : new File[]{docFile(id), thumbFile(id), nameFile(id), selFile(id), bgFile(id), guideFile(id), textFile(id), animFile(id), previewFile(id), flagsFile(id)}) f.delete();
         File[] tl = tlDir(id).listFiles();
         if (tl != null) for (File f : tl) f.delete();
         tlDir(id).delete();
+        prefs.edit().remove("pages_" + id).apply();
         java.util.Map<String, String> m = stacks();
         if (m.remove(id) != null) saveStacks(m);
         if (id.equals(curId)) {
@@ -4177,7 +4247,7 @@ public class MainActivity extends Activity {
         m.setOnMenuItemClickListener(it -> {
             int id = it.getItemId();
             saveCurrent(null);
-            if (id == 99) { newGalleryItem(sw, sh); canvasDialog(); }
+            if (id == 99) canvasDialog(true);
             else newGalleryItem(sizes[id][0], sizes[id][1]);
             return true;
         });
@@ -4202,35 +4272,12 @@ public class MainActivity extends Activity {
                             .setPositiveButton("OK", (d, w) -> { setName(id, et.getText().toString()); fillGallery(); }).show();
                     break;
                 }
-                case 2: {
-                    String nid = newId();
-                    try {
-                        java.nio.file.Files.copy(docFile(id).toPath(), docFile(nid).toPath());
-                        if (thumbFile(id).exists()) java.nio.file.Files.copy(thumbFile(id).toPath(), thumbFile(nid).toPath());
-                        if (bgFile(id).exists()) java.nio.file.Files.copy(bgFile(id).toPath(), bgFile(nid).toPath());
-                        setName(nid, nameOf(id) + " copy");
-                    } catch (Exception e) { toast("Could not duplicate"); }
-                    fillGallery();
-                    break;
-                }
+                case 2: duplicateItem(id); fillGallery(); break; // copies everything: text, guides, animation, flags…
                 case 4: stackDialog(java.util.Collections.singletonList(id)); break;
                 case 5: { java.util.Map<String, String> mm2 = stacks(); mm2.remove(id); saveStacks(mm2); fillGallery(); break; }
                 case 6: showPreview(id); break;
                 case 3:
-                    confirm("Delete \"" + nameOf(id) + "\"? This can't be undone.", () -> {
-                        for (File f : new File[]{docFile(id), thumbFile(id), nameFile(id), selFile(id), bgFile(id), guideFile(id), textFile(id), animFile(id), previewFile(id)}) f.delete();
-                        File[] tl = tlDir(id).listFiles();
-                        if (tl != null) for (File f : tl) f.delete();
-                        tlDir(id).delete();
-                        if (id.equals(curId)) { // keep a valid open drawing
-                            Rect scr = screenBounds();
-                            curId = newId();
-                            prefs.edit().putString("cur", curId).apply();
-                            newDocument(Math.min(scr.width(), scr.height()), Math.max(scr.width(), scr.height()));
-                            savedSel.clear();
-                        }
-                        fillGallery();
-                    });
+                    confirm("Delete \"" + nameOf(id) + "\"? This can't be undone.", () -> { deleteItem(id); fillGallery(); });
                     break;
             }
             return true;

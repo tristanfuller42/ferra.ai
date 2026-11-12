@@ -28,5 +28,10 @@
                 <data android:mimeType="application/zip" />
             </intent-filter>
         </activity>
+        <provider
+            android:name=".Files"
+            android:authorities="app.inkwell.files"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

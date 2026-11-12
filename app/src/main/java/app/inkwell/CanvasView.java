@@ -709,17 +709,21 @@ public class CanvasView extends View {
         for (int k = 0; k < 4; k++) c.drawCircle((q[k * 2] + q[(k + 1) % 4 * 2]) / 2, (q[k * 2 + 1] + q[(k + 1) % 4 * 2 + 1]) / 2, r * 0.7f, p);
     }
 
-    /** Rebuilds every layer at a new size through matrix m (resize, crop). Undo history is cleared. */
+    /** Rebuilds every layer at a new size through matrix m (resize, crop). Undoable: the old layers are kept in the history. */
     private void remapDocument(int w, int h, Matrix m) {
         commitMove();
         int keep = current;
+        ArrayList<Layer> before = new ArrayList<>(layers);
+        int ow = docW, oh = docH;
         ArrayList<Layer> out = new ArrayList<>();
         Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
+        long bytes = 0;
         for (Layer l : layers) {
             Layer n = new Layer(Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888), l.name);
             n.copyProps(l);
+            n.text = l.text;
             new Canvas(n.bmp).drawBitmap(l.bmp, m, p);
-            l.bmp.recycle();
+            bytes += (long) l.bmp.getByteCount() + n.bmp.getByteCount();
             if (l.mask != null) {
                 n.mask = new Layer(Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888), l.mask.name);
                 n.mask.bmp.eraseColor(Color.WHITE);
@@ -728,15 +732,28 @@ public class CanvasView extends View {
             }
             out.add(n);
         }
-        java.util.HashMap<Integer, Group> keepGroups = new java.util.HashMap<>(groups);
-        int keepNext = nextGroup, keepBg = bgGrey;
-        boolean keepBgOn = bgVisible;
-        setDocument(w, h, out);
-        bgGrey = keepBg; bgVisible = keepBgOn;
-        groups.putAll(keepGroups);
-        nextGroup = keepNext;
-        current = Math.min(keep, layers.size() - 1);
+        int cur = Math.min(keep, out.size() - 1);
+        installLayers(w, h, out, cur);
+        named(w == ow && h == oh ? "Transform canvas" : "Canvas size");
+        push(new Op(() -> installLayers(ow, oh, before, keep), () -> installLayers(w, h, out, cur), bytes));
+        afterHistory();
+    }
+
+    /** Swaps in a whole set of layers at a size, keeping groups, background and the undo history. */
+    private void installLayers(int w, int h, List<Layer> ls, int cur) {
+        docW = w; docH = h;
+        layers.clear();
+        layers.addAll(ls);
+        current = Math.max(0, Math.min(cur, layers.size() - 1));
+        moving = false; moveT.reset();
+        backup = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        backupCanvas = new Canvas(backup);
+        mask = new byte[w * h];
+        sel = null; selOverlay = null; floatBmp = null; adjSrc = null; liqSrc = null; cloneSet = false;
+        for (Layer l : layers) l.dirty = true;
+        resetVps();
         syncBackup();
+        if (getWidth() > 0) fit();
         changed();
     }
 

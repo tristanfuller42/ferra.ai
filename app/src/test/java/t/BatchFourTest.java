@@ -170,4 +170,102 @@ public class BatchFourTest extends Base {
         View side = (View) get(act, "side");
         assertSame(get(act, "sizeS"), ((android.view.ViewGroup) side).getChildAt(0));
     }
+
+    @Test public void audit_fixes_crop_undo_new_canvas_modes() {
+        pen(new float[][]{{W * .3f, H * .4f}, {W * .7f, H * .45f}});
+        int w0 = cv.docW, h0 = cv.docH;
+        long ink = inkSum(L());
+        // crop is undoable (no question, history kept)
+        call(act, "startCrop"); settle();
+        cv.crop.set(0, 0, w0 / 2f, h0);
+        ((View) UiTest.find(((View) get(act, "bottom")), "Done")).performClick(); settle();
+        assertEquals(w0 / 2, cv.docW);
+        cv.undo();
+        assertEquals("undo crop", w0, cv.docW);
+        assertEquals(ink, inkSum(L()));
+        cv.redo();
+        assertEquals(w0 / 2, cv.docW);
+        cv.undo();
+        cv.undo(); // and the stroke before it is still undoable
+        assertEquals(0, inkSum(L()));
+        cv.redo();
+        // resize is undoable too
+        cv.resizeDocument(w0 * 2 / 3, h0 * 2 / 3, true);
+        cv.undo();
+        assertEquals(w0, cv.docW);
+        // New canvas makes a new drawing and keeps this one
+        String before = (String) get(act, "curId");
+        call(act, "canvasDialog", true); settle();
+        android.app.AlertDialog d = (android.app.AlertDialog) org.robolectric.shadows.ShadowDialog.getLatestDialog();
+        assertEquals("Create", String.valueOf(d.getButton(android.app.AlertDialog.BUTTON_POSITIVE).getText()));
+        d.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick(); settle();
+        assertNotEquals("a new drawing", before, get(act, "curId"));
+        assertTrue(((List<?>) call(act, "orderedIds")).contains(before));
+        // picking a tool ends guide editing and Continue filling
+        cv.guide = 7; cv.editGuide = true; cv.fillMode = true;
+        call(act, "setTool", CanvasView.ERASE);
+        assertFalse(cv.editGuide);
+        assertFalse(cv.fillMode);
+        call(act, "setTool", CanvasView.DRAW);
+        cv.guide = 0;
+    }
+
+    @Test public void everything_survives_a_restart() {
+        pen(new float[][]{{W * .3f, H * .4f}, {W * .7f, H * .45f}});
+        cv.cur().name = "Lines";
+        cv.cur().opacity = 150;
+        cv.setBlend(cv.current, 1);
+        cv.addLayer(cv.newLayer("Masked"));
+        pen(new float[][]{{W * .3f, H * .6f}, {W * .7f, H * .6f}});
+        cv.addMask();
+        cv.cur().assist = true;
+        CanvasView.TextInfo t = new CanvasView.TextInfo("Hi", 80, true, 0, "serif", 0);
+        t.spacing = 0.2f; t.underline = true;
+        assertTrue(cv.addTextLayer(t));
+        cv.toggleLock(cv.current);
+        cv.layers.get(0).hold = 3;
+        cv.setBackground(200, true);
+        cv.guide = 4; cv.symRotate = true;
+        call(act, "togglePages");
+        int layers = cv.layers.size();
+        ctl.pause().stop();
+        settle();
+        launch();
+        assertEquals(layers, cv.layers.size());
+        assertEquals("Lines", cv.layers.get(0).name);
+        assertEquals(150, cv.layers.get(0).opacity);
+        assertEquals(1, cv.layers.get(0).blend);
+        assertEquals(3, cv.layers.get(0).hold);
+        assertNotNull("mask kept", cv.layers.get(1).mask);
+        assertTrue("assist kept", cv.layers.get(1).assist);
+        CanvasView.Layer tl = cv.layers.get(2);
+        assertNotNull("text still editable", tl.text);
+        assertEquals("Hi", tl.text.text);
+        assertTrue(tl.text.underline);
+        assertEquals(0.2f, tl.text.spacing, 1e-4);
+        assertTrue("lock kept", tl.locked);
+        assertEquals(4, cv.guide);
+        assertTrue(cv.symRotate);
+        assertTrue("page assist kept", cv.pages);
+        assertEquals(200, (int) (Integer) get(cv, "bgGrey"));
+    }
+
+    @Test public void share_opens_the_share_sheet_with_the_file() throws Exception {
+        pen(new float[][]{{W * .3f, H * .4f}, {W * .7f, H * .45f}});
+        call(act, "shareAs", 0);
+        for (int k = 0; k < 30; k++) { ShadowLooper.idleMainLooper(100, TimeUnit.MILLISECONDS); Thread.sleep(30); }
+        android.content.Intent ch = Shadows.shadowOf(act).getNextStartedActivity();
+        assertNotNull("share sheet opened", ch);
+        assertEquals(android.content.Intent.ACTION_CHOOSER, ch.getAction());
+        android.content.Intent send = ch.getParcelableExtra(android.content.Intent.EXTRA_INTENT);
+        android.net.Uri u = send.getParcelableExtra(android.content.Intent.EXTRA_STREAM);
+        assertEquals("content", u.getScheme());
+        assertTrue((send.getFlags() & android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0);
+        // the provider serves the file to other apps
+        Files prov = org.robolectric.Robolectric.buildContentProvider(Files.class).create().get();
+        try (android.os.ParcelFileDescriptor fd = prov.openFile(u, "r")) { assertTrue(fd.getStatSize() > 100); }
+        assertEquals("image/png", prov.getType(u));
+        try { prov.openFile(android.net.Uri.parse("content://app.inkwell.files/..%2Fsecret"), "r"); fail("must not leave the share folder"); }
+        catch (java.io.FileNotFoundException expected) { }
+    }
 }

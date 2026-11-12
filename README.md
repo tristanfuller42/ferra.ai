@@ -80,6 +80,8 @@ Layout matches Procreate so you can switch between the two easily:
 - **Drag and drop**: drag images from another app (split screen) onto the canvas (new layer) or the Gallery (new drawing).
 - **Transform**: Rotate 45°, magnetics (with Snapping on: rotation sticks to 15°, size to 25% steps), Advanced mesh warp (5×5).
 - **Gallery**: Sort (manual, name, newest, oldest); Select → Share or Export several (PNG/JPEG/PSD into a folder, or one PDF).
+- **Share**: Actions → Share → a format opens the share sheet (send to any app); "Save to Files" saves a copy.
+- **Back gesture**: closes what is open (panel, preview, tool mode); on the canvas it goes to the Gallery; in the Gallery it leaves the app.
 - **Backup**: Gallery → Backup: everything (drawings, stacks, brushes, fonts, settings) in one .zip; Restore adds what's missing.
   Uninstalling the app deletes its drawings, so keep a backup in Drive. (Time-lapse recordings are not included.)
 - **Crop & Resize**: Actions → Canvas → Crop & resize. Drag the box (it can go past the canvas edge to extend it),

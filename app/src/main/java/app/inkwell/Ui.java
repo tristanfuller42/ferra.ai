@@ -269,7 +269,8 @@ final class Ui {
             android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
             bg.setColor(PANEL);
             bg.setCornerRadius(14 * dp);
-            win = new android.widget.PopupWindow(sv, (int) (widthDp * dp), android.view.ViewGroup.LayoutParams.WRAP_CONTENT, true);
+            int maxW = c.getResources().getDisplayMetrics().widthPixels - (int) (16 * dp); // never wider than the screen (Fold cover)
+            win = new android.widget.PopupWindow(sv, Math.min((int) (widthDp * dp), maxW), android.view.ViewGroup.LayoutParams.WRAP_CONTENT, true);
             win.setBackgroundDrawable(bg);
             win.setElevation(18 * dp);
             win.setOutsideTouchable(true);
