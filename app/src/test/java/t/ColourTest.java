@@ -232,4 +232,45 @@ public class ColourTest extends Base {
         int m = cv.cur().mask.bmp.getPixel(d[0], d[1]);
         assertEquals("mask stays grey", Color.red(m), Color.blue(m));
     }
+
+    @Test public void palette_generator_from_words() {
+        java.util.ArrayList<String> rules = new java.util.ArrayList<>();
+        List<int[]> ocean = PaletteGen.generate("ocean", 6, 0, rules);
+        assertEquals(6, ocean.size());
+        assertEquals(6, rules.size());
+        for (int[] p : ocean) assertEquals(5, p.length);
+        // ocean leans blue/teal in the main (analogous) palette
+        float[] hsv = new float[3];
+        int blueish = 0;
+        for (int c : ocean.get(0)) { Color.colorToHSV(c, hsv); if (hsv[0] > 150 && hsv[0] < 250) blueish++; }
+        assertTrue("ocean is mostly blue: " + blueish, blueish >= 3);
+        // same words, same palettes; Shuffle gives new ones
+        assertArrayEquals(ocean.get(0), PaletteGen.generate("ocean", 6, 0, null).get(0));
+        assertFalse(java.util.Arrays.equals(ocean.get(0), PaletteGen.generate("ocean", 6, 1, null).get(0)));
+        // modifiers: pastel is light, dark is dark
+        int[] pastel = PaletteGen.generate("pastel flowers", 1, 0, null).get(0), dark = PaletteGen.generate("dark flowers", 1, 0, null).get(0);
+        int lp = 0, ld = 0; for (int c : pastel) lp += Fx_lum(c); for (int c : dark) ld += Fx_lum(c);
+        assertTrue("pastel lighter than dark: " + lp + " vs " + ld, lp > ld + 200);
+        // unknown words still work and are repeatable
+        assertArrayEquals(PaletteGen.generate("zorblax", 1, 0, null).get(0), PaletteGen.generate("zorblax", 1, 0, null).get(0));
+        assertTrue(PaletteGen.knownWords() > 80);
+        // the panel: Generate, then Save adds a palette
+        android.content.SharedPreferences pr = act.getSharedPreferences("inkwell", 0);
+        pr.edit().putInt("colTab", 4).commit();
+        call(act, "pickGrey"); settle();
+        ColorPanel cp = (ColorPanel) call(act, "colorPanel");
+        set(cp, "genQuery", "sunset");
+        call(cp, "generator"); settle();
+        View body = (View) get(cp, "body");
+        int n = cp.palettes.size();
+        View save = UiTest.find(body, "Save");
+        assertNotNull(save);
+        save.performClick();
+        assertEquals(n + 1, cp.palettes.size());
+        assertTrue(cp.palettes.get(n).name.startsWith("Sunset"));
+        assertEquals(5, cp.palettes.get(n).colors.size());
+        popShotPanel("C3_generator");
+    }
+
+    static int Fx_lum(int c) { return (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000; }
 }

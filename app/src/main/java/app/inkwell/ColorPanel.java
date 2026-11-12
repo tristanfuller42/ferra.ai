@@ -602,6 +602,7 @@ public final class ColorPanel {
             save();
             build();
         });
+        chip(top, "✦ Generate…", false, v -> generator());
         chip(top, "Import", false, v -> a.importSwatches());
         HorizontalScrollView hs = new HorizontalScrollView(a);
         hs.setHorizontalScrollBarEnabled(false);
@@ -629,6 +630,73 @@ public final class ColorPanel {
         }
         List<Integer> h = history();
         if (!h.isEmpty()) { body.addView(label("RECENT")); body.addView(swatchRow(h, null, null)); }
+    }
+
+    // ---------------- Generate palettes from words (like Adobe Color, offline) ----------------
+
+    private String genQuery = "";
+    private int genSeed;
+
+    private void generator() {
+        body.removeAllViews();
+        live.clear();
+        syncValues = null;
+        LinearLayout top = new LinearLayout(a);
+        chip(top, "‹ Palettes", false, v -> build());
+        chip(top, "Shuffle", false, v -> { genSeed++; generator(); });
+        body.addView(top);
+        android.widget.EditText q = new android.widget.EditText(a);
+        q.setSingleLine(true);
+        q.setHint("Try: ocean, autumn, neon pastel, moody forest");
+        q.setTextColor(Color.WHITE);
+        q.setHintTextColor(0xFF8E8E93);
+        q.setText(genQuery);
+        q.setSelection(genQuery.length());
+        q.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+        q.setOnEditorActionListener((v, id, ev) -> {
+            genQuery = v.getText().toString();
+            genSeed = 0;
+            android.view.inputmethod.InputMethodManager im = (android.view.inputmethod.InputMethodManager) a.getSystemService(android.content.Context.INPUT_METHOD_SERVICE);
+            if (im != null) im.hideSoftInputFromWindow(v.getWindowToken(), 0);
+            generator();
+            return true;
+        });
+        body.addView(q, new LinearLayout.LayoutParams(-1, -2));
+        TextView tip = label(genQuery.isEmpty() ? "Random palettes · type words for a theme, then Search on the keyboard"
+                : "Palettes for \"" + genQuery.trim() + "\" · tap a colour to use it · Shuffle for more");
+        body.addView(tip);
+        ArrayList<String> rules = new ArrayList<>();
+        List<int[]> ps = PaletteGen.generate(genQuery, 6, genSeed, rules);
+        for (int i = 0; i < ps.size(); i++) {
+            int[] cs = ps.get(i);
+            String rule = rules.get(i);
+            LinearLayout row = new LinearLayout(a);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, (int) (6 * dp), 0, 0);
+            LinearLayout strip = new LinearLayout(a);
+            for (int c : cs) {
+                View v = new View(a);
+                v.setBackgroundColor(c);
+                v.setOnClickListener(x -> set(c));
+                strip.addView(v, new LinearLayout.LayoutParams(0, (int) (40 * dp), 1f));
+            }
+            row.addView(strip, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView save = chip(row, "Save", false, v -> {
+                String base = genQuery.trim().isEmpty() ? "Random" : genQuery.trim();
+                Palette p = new Palette(Character.toUpperCase(base.charAt(0)) + base.substring(1) + " · " + rule);
+                for (int c : cs) p.colors.add(c);
+                palettes.add(p);
+                save();
+                a.hud("Saved \"" + p.name + "\" to your palettes");
+                ((TextView) v).setText("✓ Saved");
+                v.setEnabled(false);
+            });
+            save.setPadding((int) (10 * dp), 0, (int) (6 * dp), 0);
+            body.addView(row);
+            TextView rl = label(rule);
+            rl.setPadding(0, (int) (2 * dp), 0, 0);
+            body.addView(rl);
+        }
     }
 
     private void paletteMenu(View anchor, int k) {

@@ -107,6 +107,9 @@ Layout matches Procreate so you can switch between the two easily:
   the top (tap the previous one to go back); your default palette and recent colours under every tab.
 - **Palettes**: make, rename, delete; ＋ adds the current colour; hold a colour to remove it; ★ marks the default.
   Import and export Procreate **.swatches** files.
+- **Generate palettes** (Palettes → ✦ Generate…): type words like "ocean", "autumn", "neon pastel", "moody forest"
+  (about 90 themes, moods and materials built in; any other word works too) for 6 palettes with different colour rules.
+  Shuffle for more, tap a colour to use it, Save to keep a palette. Works offline.
 - **Colour adjustments**: Hue/Saturation/Brightness, Colour Balance, Gradient Map (plus all the tone adjustments).
 - Everything works in colour: brushes, smudge, fills (stop at colour changes too), eyedropper, text, background,
   PSD/PNG/JPEG/GIF/animated PNG/MP4. Painting on a layer mask uses the brightness of your colour.
