@@ -32,7 +32,20 @@ final class Brushes {
     }
 
     static List<CanvasView.Brush> read(byte[] data) throws IOException {
-        if (data.length > 4 && data[0] == 'P' && data[1] == 'K') return readProcreate(data);
+        if (data.length > 4 && data[0] == 'P' && data[1] == 'K') {
+            List<CanvasView.Brush> own = new ArrayList<>(); // Inkwell export: zip of .fbr files
+            try (ZipInputStream z = new ZipInputStream(new ByteArrayInputStream(data))) {
+                ZipEntry e;
+                while ((e = z.getNextEntry()) != null)
+                    if (e.getName().endsWith(".fbr")) {
+                        CanvasView.Brush b = load(new ByteArrayInputStream(readAll(z)));
+                        b.builtin = false;
+                        own.add(b);
+                    }
+            }
+            if (!own.isEmpty()) return own;
+            return readProcreate(data);
+        }
         if (data.length > 4 && looksLikeAbr(data)) return readAbr(data);
         throw new IOException("Not a Procreate or Photoshop brush file");
     }
@@ -275,7 +288,15 @@ final class Brushes {
     // ---------------- Saving imported brushes ----------------
 
     static void save(CanvasView.Brush b, File f) throws IOException {
-        try (DataOutputStream o = new DataOutputStream(new java.util.zip.DeflaterOutputStream(new FileOutputStream(f)))) {
+        try (FileOutputStream out = new FileOutputStream(f)) { save(b, out); }
+        b.file = f;
+    }
+
+    /** Inkwell's own brush format (also used inside exported .inkbrush / .inkbrushset files). */
+    static void save(CanvasView.Brush b, java.io.OutputStream os) throws IOException {
+        java.util.zip.DeflaterOutputStream z = new java.util.zip.DeflaterOutputStream(os);
+        DataOutputStream o = new DataOutputStream(z);
+        {
             o.writeInt(2);
             o.writeUTF(b.name);
             o.writeFloat(b.minSize); o.writeFloat(b.minAlpha); o.writeFloat(b.alpha);
@@ -290,11 +311,29 @@ final class Brushes {
             o.writeInt(CanvasView.Brush.KEYS.length);
             for (String k : CanvasView.Brush.KEYS) { o.writeUTF(k); o.writeFloat(b.get(k)); }
         }
-        b.file = f;
+        o.flush();
+        z.finish();
+    }
+
+    /** Exported brushes: a zip of .fbr files (one brush = .inkbrush, a set = .inkbrushset). */
+    static void export(List<CanvasView.Brush> bs, java.io.OutputStream os) throws IOException {
+        java.util.zip.ZipOutputStream z = new java.util.zip.ZipOutputStream(os);
+        for (int i = 0; i < bs.size(); i++) {
+            z.putNextEntry(new ZipEntry(String.format("%03d", i) + ".fbr"));
+            ByteArrayOutputStream b = new ByteArrayOutputStream();
+            save(bs.get(i), b);
+            z.write(b.toByteArray());
+            z.closeEntry();
+        }
+        z.finish();
     }
 
     static CanvasView.Brush load(File f) throws IOException {
-        try (DataInputStream in = new DataInputStream(new java.util.zip.InflaterInputStream(new FileInputStream(f)))) {
+        try (InputStream is = new FileInputStream(f)) { CanvasView.Brush b = load(is); b.file = f; return b; }
+    }
+
+    static CanvasView.Brush load(InputStream is) throws IOException {
+        try (DataInputStream in = new DataInputStream(new java.util.zip.InflaterInputStream(is))) {
             int ver = in.readInt();
             if (ver != 1 && ver != 2) throw new IOException("bad version");
             CanvasView.Brush b = new CanvasView.Brush(in.readUTF(), in.readFloat(), in.readFloat(), in.readFloat(),
@@ -309,7 +348,6 @@ final class Brushes {
                 int n = in.readInt();
                 for (int i = 0; i < n; i++) { String k = in.readUTF(); b.put(k, in.readFloat()); }
             }
-            b.file = f;
             return b;
         }
     }

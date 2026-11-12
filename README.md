@@ -68,6 +68,19 @@ Layout matches Procreate so you can switch between the two easily:
 - **Adjustments**: Layer or Pencil mode (Pencil = paint the adjustment with the brush).
 - **Liquify**: Crystals and Edge modes, Momentum slider.
 - **Camera**: Actions → Add → Take a photo (imported as a layer).
+- **Stylus tilt**: pencils and charcoal get wider/lighter when the pen leans (Brush Studio → Dynamics → Tilt).
+- **Eyedropper ring**: new grey on top, previous grey below.
+- **QuickShape**: also arc, triangle and polyline (all with edit handles; second finger = equilateral / 15° segments).
+- **QuickMenu**: 6 shortcuts in a ring. Prefs → Gesture controls: open it with touch-and-hold or the sidebar square button;
+  long-press a slot to change it.
+- **Gesture controls**: choose touch-and-hold action and delay; switch two/three/four-finger shortcuts on or off.
+- **Layers**: two-finger swipe right on a layer = Alpha Lock; two-finger hold = select its contents.
+- **Brush Library**: Recent set; drag ≡ to reorder; long-press a brush (or a set name) to export `.inkbrush` / `.inkbrushset`.
+- **Page Assist**: Actions → Canvas. Each layer is a page; ‹ › to flip; export all pages as one PDF.
+- **Fonts**: Text → ＋ Import font (.ttf / .otf).
+- **Drag and drop**: drag images from another app (split screen) onto the canvas (new layer) or the Gallery (new drawing).
+- **Transform**: Rotate 45°, magnetics (with Snapping on: rotation sticks to 15°, size to 25% steps), Advanced mesh warp (5×5).
+- **Gallery**: Sort (manual, name, newest, oldest); Select → Share or Export several (PNG/JPEG/PSD into a folder, or one PDF).
 
 ### Gallery
 Inkwell opens in the Gallery like Procreate. ＋ New (size presets), Import (any supported file), tap to open,

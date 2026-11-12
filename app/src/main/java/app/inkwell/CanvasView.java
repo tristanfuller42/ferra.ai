@@ -182,12 +182,13 @@ public class CanvasView extends View {
         float grainScale = 1f;                // texture size multiplier
         float curve = 1f;                     // pressure curve: <1 = light touch gives more, >1 = needs more pressure
         float sizeScale = 1f;                 // maximum size relative to the size slider
+        float tiltSize, tiltOpacity;          // stylus tilt (pen on its side): wider / lighter strokes
         public boolean builtin;
 
         /** All adjustable settings as named values (used by Brush Studio, saving, reset). */
         static final String[] KEYS = {"spacing", "streamline", "stabilize", "taperStart", "taperEnd", "jitterSize",
                 "jitterOpacity", "scatter", "hard", "roundness", "angle", "follow", "grain", "grainScale",
-                "minSize", "minAlpha", "curve", "alpha", "sizeScale"};
+                "minSize", "minAlpha", "curve", "alpha", "sizeScale", "tiltSize", "tiltOpacity"};
 
         float get(String k) {
             switch (k) {
@@ -198,6 +199,7 @@ public class CanvasView extends View {
                 case "grain": return grain; case "grainScale": return grainScale; case "minSize": return minSize;
                 case "minAlpha": return minAlpha; case "curve": return curve; case "alpha": return alpha;
                 case "sizeScale": return sizeScale;
+                case "tiltSize": return tiltSize; case "tiltOpacity": return tiltOpacity;
             }
             return 0;
         }
@@ -211,6 +213,7 @@ public class CanvasView extends View {
                 case "grain": grain = v; break; case "grainScale": grainScale = v; break; case "minSize": minSize = v; break;
                 case "minAlpha": minAlpha = v; break; case "curve": curve = v; break; case "alpha": alpha = v; break;
                 case "sizeScale": sizeScale = v; break;
+                case "tiltSize": tiltSize = v; break; case "tiltOpacity": tiltOpacity = v; break;
             }
         }
 
@@ -294,10 +297,10 @@ public class CanvasView extends View {
         new Brush("Fine liner",     1f,    1f,    1f,   0.9f, 0f,    0.08f).with("Inking", 0.3f, 0f, 0f),
         new Brush("Dry ink",        0.3f,  0.6f,  1f,   0.8f, 0.5f,  0.1f).with("Inking", 0.2f, 0.1f, 0.1f),
         new Brush("Marker",         1f,    1f,    0.5f, 0.95f, 0f,   0.08f).with("Inking", 0.2f, 0f, 0f),
-        new Brush("HB pencil",      0.7f,  0.15f, 0.9f, 0.7f, 0.6f,  0.1f).with("Sketching", 0f, 0f, 0f),
-        new Brush("6B pencil",      0.6f,  0.25f, 1f,   0.6f, 0.75f, 0.1f).with("Sketching", 0f, 0f, 0f),
-        new Brush("Charcoal",       0.6f,  0.2f,  1f,   0.4f, 0.85f, 0.1f).with("Sketching", 0f, 0f, 0f),
-        new Brush("Soft shading",   0.5f,  0.05f, 0.8f, 0f,   0f,    0.1f).with("Airbrushing", 0f, 0f, 0f),
+        new Brush("HB pencil",      0.7f,  0.15f, 0.9f, 0.7f, 0.6f,  0.1f).with("Sketching", 0f, 0f, 0f).p("tiltSize", 0.6f).p("tiltOpacity", 0.35f),
+        new Brush("6B pencil",      0.6f,  0.25f, 1f,   0.6f, 0.75f, 0.1f).with("Sketching", 0f, 0f, 0f).p("tiltSize", 0.8f).p("tiltOpacity", 0.4f),
+        new Brush("Charcoal",       0.6f,  0.2f,  1f,   0.4f, 0.85f, 0.1f).with("Sketching", 0f, 0f, 0f).p("tiltSize", 0.9f).p("tiltOpacity", 0.3f),
+        new Brush("Soft shading",   0.5f,  0.05f, 0.8f, 0f,   0f,    0.1f).with("Airbrushing", 0f, 0f, 0f).p("tiltSize", 0.5f).p("tiltOpacity", 0.2f),
         new Brush("Airbrush",       1f,    0.02f, 0.6f, 0f,   0f,    0.1f).with("Airbrushing", 0f, 0f, 0f),
         new Brush("Hard round",     1f,    0.1f,  1f,   0.9f, 0f,    0.08f).with("Airbrushing", 0f, 0f, 0f),
         // Painting set
@@ -364,7 +367,10 @@ public class CanvasView extends View {
     private final Matrix poly = new Matrix();
     private float[] srcCorners = new float[8], dstCorners = new float[8];
     public int xform;                  // 0 uniform, 1 freeform, 2 distort, 3 warp
-    private float[] warp = new float[32]; // 4x4 warp control points (canvas coords, before poly)
+    private float[] warp = new float[50]; // warp control points, 4x4 (Bezier) or 5x5 (advanced mesh), canvas coords before poly
+    public boolean advMesh;                // Procreate's "Advanced mesh": a 5x5 grid of points the image passes through
+    private int wn() { return advMesh ? 5 : 4; }
+    private float magA, magS = 1;          // magnetic rotation/scale correction currently applied (Snapping)
     private int fx0, fy0;                // floating bitmap origin
 
     // Perspective guide vanishing points; guide editing; drawing assist
@@ -592,8 +598,7 @@ public class CanvasView extends View {
         float[] q;
         Matrix m;
         if (xform == 3) {
-            q = new float[32];
-            for (int k = 0; k < 16; k++) { q[k * 2] = warp[k * 2]; q[k * 2 + 1] = warp[k * 2 + 1]; }
+            q = java.util.Arrays.copyOf(warp, wn() * wn() * 2);
             m = transformMatrix();
         } else {
             q = new float[xform == 1 ? 16 : 8];
@@ -618,18 +623,66 @@ public class CanvasView extends View {
         int k = 0;
         for (int j = 0; j <= MESH; j++)
             for (int i = 0; i <= MESH; i++) {
-                float u = i / (float) MESH, w = j / (float) MESH;
-                float[] bu = bern(u), bw = bern(w);
-                float x = 0, y = 0;
-                for (int r = 0; r < 4; r++) for (int cI = 0; cI < 4; cI++) {
-                    float f = bw[r] * bu[cI];
-                    x += f * warp[(r * 4 + cI) * 2];
-                    y += f * warp[(r * 4 + cI) * 2 + 1];
-                }
-                v[k++] = x; v[k++] = y;
+                float[] q = surface(i / (float) MESH, j / (float) MESH);
+                v[k++] = q[0]; v[k++] = q[1];
             }
         poly.mapPoints(v);
         return v;
+    }
+
+    /** A point of the warped surface (u, w in 0..1), before the freeform/distort matrix. */
+    private float[] surface(float u, float w) {
+        float x = 0, y = 0;
+        if (!advMesh) { // 4x4 Bezier patch
+            float[] bu = bern(u), bw = bern(w);
+            for (int r = 0; r < 4; r++) for (int cI = 0; cI < 4; cI++) {
+                float f = bw[r] * bu[cI];
+                x += f * warp[(r * 4 + cI) * 2];
+                y += f * warp[(r * 4 + cI) * 2 + 1];
+            }
+            return new float[]{x, y};
+        }
+        // 5x5 Catmull-Rom: passes through every point, and each point only bends its own area
+        int n = 5;
+        float fu = u * (n - 1), fw = w * (n - 1);
+        int cu = Math.min(n - 2, (int) fu), cw = Math.min(n - 2, (int) fw);
+        float[] ku = cr(fu - cu), kw = cr(fw - cw);
+        for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) {
+            float f = kw[r] * ku[c];
+            x += f * meshPt(cw - 1 + r, cu - 1 + c, 0);
+            y += f * meshPt(cw - 1 + r, cu - 1 + c, 1);
+        }
+        return new float[]{x, y};
+    }
+
+    /** 5x5 mesh point; outside the grid it continues in a straight line (so edges stay evenly spaced). */
+    private float meshPt(int r, int c, int k) {
+        int n = 5;
+        if (r < 0) return 2 * meshPt(0, c, k) - meshPt(1, c, k);
+        if (r >= n) return 2 * meshPt(n - 1, c, k) - meshPt(n - 2, c, k);
+        if (c < 0) return 2 * meshPt(r, 0, k) - meshPt(r, 1, k);
+        if (c >= n) return 2 * meshPt(r, n - 1, k) - meshPt(r, n - 2, k);
+        return warp[(r * n + c) * 2 + k];
+    }
+
+    private static float[] cr(float t) {
+        float t2 = t * t, t3 = t2 * t;
+        return new float[]{(-t3 + 2 * t2 - t) / 2, (3 * t3 - 5 * t2 + 2) / 2, (-3 * t3 + 4 * t2 + t) / 2, (t3 - t2) / 2};
+    }
+
+    /** Switches between the simple 4x4 warp and the 5x5 advanced mesh, keeping the current shape. */
+    public void setAdvancedMesh(boolean on) {
+        if (on == advMesh) return;
+        xfMark();
+        int n = on ? 5 : 4;
+        float[] nw = new float[50];
+        for (int r = 0; r < n; r++) for (int c = 0; c < n; c++) {
+            float[] q = surface(c / (float) (n - 1), r / (float) (n - 1));
+            nw[(r * n + c) * 2] = q[0]; nw[(r * n + c) * 2 + 1] = q[1];
+        }
+        warp = nw;
+        advMesh = on;
+        invalidate();
     }
 
     private static float[] bern(float t) {
@@ -639,7 +692,7 @@ public class CanvasView extends View {
 
     /** Draws all layers: groups, blend modes, clipping masks, layer masks. live = include move preview. */
     private void render(Canvas c, boolean live) {
-        if (anim && live) { renderAnim(c); return; }
+        if ((anim || pages) && live) { renderAnim(c); return; }
         int i = 0;
         while (i < layers.size()) {
             int g = layers.get(i).group, j = i;
@@ -719,18 +772,19 @@ public class CanvasView extends View {
 
     // ---------- Animation Assist ----------
     public boolean anim, animBackground, playing;
+    public boolean pages; // Page Assist: each layer is a page, only the current page shows
     public int onion = 2, fps = 12, playFrame;
     public float onionOpacity = 0.35f;
 
     /** Frame layer indices (layer 0 is excluded when it is the background). */
-    public int firstFrame() { return anim && animBackground && layers.size() > 1 ? 1 : 0; }
+    public int firstFrame() { return (anim || pages) && animBackground && layers.size() > 1 ? 1 : 0; }
 
     private void renderAnim(Canvas c) {
         Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
         int f0 = firstFrame();
         if (f0 == 1 && layers.get(0).visible) drawLayer(c, 0, p, true);
         int cur = playing ? playFrame : Math.max(f0, current);
-        if (!playing) for (int k = onion; k >= 1; k--) {
+        if (!playing && !pages) for (int k = onion; k >= 1; k--) {
             float a = onionOpacity * (1 - (k - 1f) / (onion + 1));
             for (int idx : new int[]{cur - k, cur + k}) {
                 if (idx < f0 || idx >= layers.size()) continue;
@@ -941,14 +995,16 @@ public class CanvasView extends View {
         drawShapeHandles(c);
         drawCursor(c);
         drawSnapLines(c);
+        drawLoupe(c);
         if (onFrame != null) onFrame.run();
         if (tool == MOVE && moving) { // transform box + handles (screen space)
             float[] q = handlePoints();
             g.setStrokeWidth(1.5f);
             g.setColor(0xFF3D9BFF);
             if (xform == 3) { // warp grid
-                for (int r = 0; r < 4; r++) for (int k = 0; k < 3; k++) {
-                    int a = r * 4 + k, b = a + 1, a2 = k * 4 + r, b2 = a2 + 4;
+                int n = wn();
+                for (int r = 0; r < n; r++) for (int k = 0; k < n - 1; k++) {
+                    int a = r * n + k, b = a + 1, a2 = k * n + r, b2 = a2 + n;
                     c.drawLine(q[a * 2], q[a * 2 + 1], q[b * 2], q[b * 2 + 1], g);
                     c.drawLine(q[a2 * 2], q[a2 * 2 + 1], q[b2 * 2], q[b2 * 2 + 1], g);
                 }
@@ -976,15 +1032,30 @@ public class CanvasView extends View {
     private float gSwipeY;
     public boolean pickNext; // eyedropper button armed
     private boolean picking, shaping, shapeClosed, holdUndoing, scrubbed;
+    private float[] shp = new float[0]; // QuickShape corner points (arc, triangle, polyline)
     private float downSX, downSY, holdSX, holdSY, curX, curY, gScale = 1f;
     private float[] spts = new float[300];
     private int sn, gCount, scrubDir, scrubFlips;
     private float pathLen, scrubX, shapeP, ecx, ecy, erx, ery;
 
     /** Touch and hold: eyedropper. */
+    // Gesture controls (Prefs)
+    public int holdAction = 0;            // finger touch-and-hold: 0 eyedropper, 1 QuickMenu, 2 nothing
+    public int holdDelay = 450;           // ms
+    public boolean gUndo = true, gRedo = true, gClear = true, gCopy = true, gFull = true;
+    public java.util.function.BiConsumer<Float, Float> onQuickMenu; // screen point
+
     private final Runnable pickHold = () -> {
         if (!stroking && !gesture) return;
+        if (holdAction == 1) { // QuickMenu instead of the eyedropper
+            abortStroke();
+            stroking = false;
+            scrubbed = true; // the rest of this touch does nothing
+            if (onQuickMenu != null) onQuickMenu.accept(downSX, downSY);
+            return;
+        }
         abortStroke();
+        pickOld = grey;
         picking = true;
         pickAt(downSX, downSY);
     };
@@ -1005,7 +1076,29 @@ public class CanvasView extends View {
         shapeClosed = gap < pathLen * 0.15f && (x1 - x0) > 4 && (y1 - y0) > 4;
         ecx = (x0 + x1) / 2; ecy = (y0 + y1) / 2; erx = (x1 - x0) / 2; ery = (y1 - y0) / 2;
         shapeKind = 0;
-        if (shapeClosed) { // ellipse or rectangle: whichever the drawn points fit better
+        float eps = Math.max(4, pathLen * 0.045f);
+        if (!shapeClosed) { // open: straight line, arc, or polyline (several joined lines)
+            float[] v = simplify(eps);
+            float chord = (float) Math.hypot(curX - spts[0], curY - spts[1]);
+            if (v.length >= 6 && maxDev(spts[0], spts[1], curX, curY) > chord * 0.12f) { // wobbly but straight-ish stays a line
+                float[] mid = midPoint();
+                float err = arcError(spts[0], spts[1], mid[0], mid[1], curX, curY);
+                if (err < 0.06f || v.length <= 6) { shapeKind = 3; shp = new float[]{spts[0], spts[1], mid[0], mid[1], curX, curY}; }
+                else { shapeKind = 5; shp = v; shp[shp.length - 2] = curX; shp[shp.length - 1] = curY; }
+            }
+        } else if (simplifyClosed(eps).length == 6) { // three corners: triangle
+            float[] t = simplifyClosed(eps);
+            float triErr = 0, ellErr = 0;
+            for (int k = 0; k < sn; k += 3) {
+                float nx = (spts[k] - ecx) / Math.max(1, erx), ny = (spts[k + 1] - ecy) / Math.max(1, ery);
+                ellErr += Math.abs((float) Math.sqrt(nx * nx + ny * ny) - 1) * Math.max(erx, ery);
+                float dmin = Float.MAX_VALUE;
+                for (int j = 0; j < 3; j++) dmin = Math.min(dmin, segDist(spts[k], spts[k + 1], t[j * 2], t[j * 2 + 1], t[(j + 1) % 3 * 2], t[(j + 1) % 3 * 2 + 1]));
+                triErr += dmin;
+            }
+            if (triErr < ellErr * 0.7f) { shapeKind = 4; shp = t; }
+        }
+        if (this.shapeKind == 0 && shapeClosed) { // ellipse or rectangle: whichever the drawn points fit better
             float ellErr = 0, rectErr = 0;
             int n = 0;
             for (int k = 0; k < sn; k += 3, n++) {
@@ -1026,7 +1119,7 @@ public class CanvasView extends View {
     /** Two-finger hold: keep undoing. */
     private final Runnable undoHold = new Runnable() {
         public void run() {
-            if (!gesture || gCount != 2 || gMax != 2 || gMoved > 30) return;
+            if (!gesture || !gUndo || gCount != 2 || gMax != 2 || gMoved > 30) return;
             holdUndoing = true;
             undo();
             postDelayed(this, 150);
@@ -1056,8 +1149,104 @@ public class CanvasView extends View {
         strokeDirty.setEmpty();
     }
 
-    // QuickShape state: 0 line, 1 ellipse, 2 rectangle (quad corners, editable)
+    // QuickShape state: 0 line, 1 ellipse, 2 rectangle (quad corners), 3 arc (start, middle, end),
+    // 4 triangle, 5 polyline (corners in poly) - all editable with handles
     private int shapeKind;
+
+    /** Corner points of the drawn stroke (Ramer-Douglas-Peucker), as x,y pairs. */
+    private float[] simplify(float eps) { return rdp(0, sn / 3 - 1, eps, true); }
+
+    private float[] rdp(int a, int b, float eps, boolean withEnd) {
+        float ax = spts[a * 3], ay = spts[a * 3 + 1], bx = spts[b * 3], by = spts[b * 3 + 1];
+        int far = -1; float fd = 0;
+        for (int i = a + 1; i < b; i++) {
+            float d = segDist(spts[i * 3], spts[i * 3 + 1], ax, ay, bx, by);
+            if (d > fd) { fd = d; far = i; }
+        }
+        if (far < 0 || fd < eps) return withEnd ? new float[]{ax, ay, bx, by} : new float[]{ax, ay};
+        float[] l = rdp(a, far, eps, false), r = rdp(far, b, eps, withEnd);
+        float[] o = java.util.Arrays.copyOf(l, l.length + r.length);
+        System.arraycopy(r, 0, o, l.length, r.length);
+        return o;
+    }
+
+    /** Corners of a closed stroke: split at the point farthest from the start, simplify both halves. */
+    private float[] simplifyClosed(float eps) {
+        int n = sn / 3, far = 0; float fd = 0;
+        for (int i = 1; i < n; i++) {
+            float d = (float) Math.hypot(spts[i * 3] - spts[0], spts[i * 3 + 1] - spts[1]);
+            if (d > fd) { fd = d; far = i; }
+        }
+        if (far == 0) return new float[0];
+        float[] l = rdp(0, far, eps, false), r = rdp(far, n - 1, eps, false);
+        float[] o = java.util.Arrays.copyOf(l, l.length + r.length);
+        System.arraycopy(r, 0, o, l.length, r.length);
+        // the start point is only a corner if the stroke turns there
+        if (o.length >= 8) {
+            int m = o.length;
+            float d = segDist(o[0], o[1], o[m - 2], o[m - 1], o[2], o[3]);
+            if (d < eps) o = java.util.Arrays.copyOfRange(o, 2, m);
+        }
+        return o;
+    }
+
+    private static float segDist(float px, float py, float ax, float ay, float bx, float by) {
+        float dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+        float t = l2 == 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
+        return (float) Math.hypot(px - ax - t * dx, py - ay - t * dy);
+    }
+
+    private float maxDev(float ax, float ay, float bx, float by) {
+        float m = 0;
+        for (int k = 0; k < sn; k += 3) m = Math.max(m, segDist(spts[k], spts[k + 1], ax, ay, bx, by));
+        return m;
+    }
+
+    /** The stroke point halfway along its length. */
+    private float[] midPoint() {
+        float half = pathLen / 2, acc = 0;
+        for (int k = 3; k < sn; k += 3) {
+            acc += (float) Math.hypot(spts[k] - spts[k - 3], spts[k + 1] - spts[k - 2]);
+            if (acc >= half) return new float[]{spts[k], spts[k + 1]};
+        }
+        return new float[]{spts[sn - 3], spts[sn - 2]};
+    }
+
+    /** Circle through three points, or null if they are in a line: {cx, cy, r}. */
+    private static float[] circle3(float x1, float y1, float x2, float y2, float x3, float y3) {
+        float d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2));
+        if (Math.abs(d) < 1e-3f) return null;
+        float s1 = x1 * x1 + y1 * y1, s2 = x2 * x2 + y2 * y2, s3 = x3 * x3 + y3 * y3;
+        float cx = (s1 * (y2 - y3) + s2 * (y3 - y1) + s3 * (y1 - y2)) / d;
+        float cy = (s1 * (x3 - x2) + s2 * (x1 - x3) + s3 * (x2 - x1)) / d;
+        return new float[]{cx, cy, (float) Math.hypot(x1 - cx, y1 - cy)};
+    }
+
+    /** How well the stroke follows the circle through start, middle and end (mean error / radius). */
+    private float arcError(float x1, float y1, float x2, float y2, float x3, float y3) {
+        float[] c = circle3(x1, y1, x2, y2, x3, y3);
+        if (c == null || c[2] > 1e5f) return 1;
+        float e = 0; int n = 0;
+        for (int k = 0; k < sn; k += 3, n++) e += Math.abs((float) Math.hypot(spts[k] - c[0], spts[k + 1] - c[1]) - c[2]);
+        return e / n / c[2];
+    }
+
+    /** Draws the arc from (x1,y1) through (x2,y2) to (x3,y3). */
+    private void arcThrough(float x1, float y1, float x2, float y2, float x3, float y3) {
+        float[] c = circle3(x1, y1, x2, y2, x3, y3);
+        startAt(x1, y1, shapeP);
+        if (c == null) { segmentTo(x3, y3, shapeP); return; }
+        double a1 = Math.atan2(y1 - c[1], x1 - c[0]), a2 = Math.atan2(y2 - c[1], x2 - c[0]), a3 = Math.atan2(y3 - c[1], x3 - c[0]);
+        double sweep = norm(a3 - a1), mid = norm(a2 - a1);
+        if (mid > sweep) sweep -= 2 * Math.PI; // go the other way round so the arc passes the middle point
+        int n = Math.max(12, (int) (Math.abs(sweep) * 30));
+        for (int k = 1; k <= n; k++) {
+            double a = a1 + sweep * k / n;
+            segmentTo(c[0] + c[2] * (float) Math.cos(a), c[1] + c[2] * (float) Math.sin(a), shapeP);
+        }
+    }
+
+    private static double norm(double a) { while (a < 0) a += 2 * Math.PI; while (a >= 2 * Math.PI) a -= 2 * Math.PI; return a; }
     private boolean shapeConstrain, shapeEdit, wasShape;
     private float lineX0, lineY0, lineX1, lineY1;
     private float[] quad = new float[8];
@@ -1081,6 +1270,29 @@ public class CanvasView extends View {
             }
             startAt(quad[0], quad[1], shapeP);
             for (int k = 1; k <= 4; k++) segmentTo(quad[(k % 4) * 2], quad[(k % 4) * 2 + 1], shapeP);
+        } else if (shapeKind == 3) {
+            if (!shapeEdit) { shp[4] = curX; shp[5] = curY; }
+            arcThrough(shp[0], shp[1], shp[2], shp[3], shp[4], shp[5]);
+        } else if (shapeKind == 4) {
+            if (shapeConstrain && !shapeEdit) { // equilateral, on the first side
+                float dx = shp[2] - shp[0], dy = shp[3] - shp[1];
+                float sx = shp[0] + dx / 2 - dy * 0.866f, sy = shp[1] + dy / 2 + dx * 0.866f;
+                float tx = shp[0] + dx / 2 + dy * 0.866f, ty = shp[1] + dy / 2 - dx * 0.866f;
+                boolean first = Math.hypot(sx - shp[4], sy - shp[5]) < Math.hypot(tx - shp[4], ty - shp[5]);
+                shp[4] = first ? sx : tx; shp[5] = first ? sy : ty;
+            }
+            startAt(shp[0], shp[1], shapeP);
+            for (int k = 1; k <= 3; k++) segmentTo(shp[(k % 3) * 2], shp[(k % 3) * 2 + 1], shapeP);
+        } else if (shapeKind == 5) {
+            if (!shapeEdit) { shp[shp.length - 2] = curX; shp[shp.length - 1] = curY; }
+            if (shapeConstrain && !shapeEdit) // snap every segment to 15° steps
+                for (int k = 2; k < shp.length; k += 2) {
+                    float dx = shp[k] - shp[k - 2], dy = shp[k + 1] - shp[k - 1], len = (float) Math.hypot(dx, dy);
+                    double a = Math.round(Math.atan2(dy, dx) / (Math.PI / 12)) * (Math.PI / 12);
+                    shp[k] = shp[k - 2] + (float) Math.cos(a) * len; shp[k + 1] = shp[k - 1] + (float) Math.sin(a) * len;
+                }
+            startAt(shp[0], shp[1], shapeP);
+            for (int k = 2; k < shp.length; k += 2) segmentTo(shp[k], shp[k + 1], shapeP);
         } else {
             if (!shapeEdit) { lineX1 = curX; lineY1 = curY; }
             if (shapeConstrain) { // snap the angle to 15° steps
@@ -1098,6 +1310,7 @@ public class CanvasView extends View {
     private float[] shapeHandles() {
         if (shapeKind == 0) return new float[]{lineX0, lineY0, lineX1, lineY1};
         if (shapeKind == 1) return new float[]{ecx + erx, ecy, ecx - erx, ecy, ecx, ecy + ery, ecx, ecy - ery};
+        if (shapeKind >= 3) return shp.clone();
         return quad.clone();
     }
 
@@ -1118,6 +1331,7 @@ public class CanvasView extends View {
         if (action == MotionEvent.ACTION_MOVE && shapeDrag >= 0) {
             if (shapeKind == 0) { if (shapeDrag == 0) { lineX0 = f[0]; lineY0 = f[1]; } else { lineX1 = f[0]; lineY1 = f[1]; } }
             else if (shapeKind == 1) { if (shapeDrag < 2) erx = Math.max(2, Math.abs(f[0] - ecx)); else ery = Math.max(2, Math.abs(f[1] - ecy)); }
+            else if (shapeKind >= 3) { shp[shapeDrag * 2] = f[0]; shp[shapeDrag * 2 + 1] = f[1]; }
             else { quad[shapeDrag * 2] = f[0]; quad[shapeDrag * 2 + 1] = f[1]; }
             renderShape();
             return true;
@@ -1157,7 +1371,33 @@ public class CanvasView extends View {
     }
 
     /** Sets the ink grey to the composited colour under a screen point. */
+    private float pickSX, pickSY;
+    private int pickOld; // grey before this eyedropper touch (bottom half of the ring)
+
+    /** Eyedropper ring like Procreate: new grey on top, previous grey below, around the finger. */
+    private void drawLoupe(Canvas c) {
+        if (!picking) return;
+        float d = getResources().getDisplayMetrics().density, ro = 62 * d, w = 22 * d, r = ro - w / 2;
+        RectF o = new RectF(pickSX - r, pickSY - r, pickSX + r, pickSY + r);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(w);
+        p.setColor(0xFF000000 | grey * 0x10101);
+        c.drawArc(o, 180, 180, false, p);
+        p.setColor(0xFF000000 | pickOld * 0x10101);
+        c.drawArc(o, 0, 180, false, p);
+        p.setStrokeWidth(1.5f * d);
+        p.setColor(0x99000000);
+        c.drawCircle(pickSX, pickSY, ro + d, p);
+        c.drawCircle(pickSX, pickSY, ro - w - d, p);
+        p.setColor(0xCCFFFFFF);
+        c.drawCircle(pickSX, pickSY, ro, p);
+        c.drawCircle(pickSX, pickSY, ro - w, p);
+    }
+
     private void pickAt(float sx, float sy) {
+        pickSX = sx; pickSY = sy;
+        invalidate();
         view.invert(inverse);
         map(sx, sy);
         int x = (int) pt[0], y = (int) pt[1];
@@ -1178,6 +1418,7 @@ public class CanvasView extends View {
         boolean r = touch(e);
         int a = e.getActionMasked();
         if ((a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) && !shapeEdit && !stroking) endFingerErase();
+        if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) invalidate(); // e.g. hide the eyedropper ring
         return r;
     }
 
@@ -1217,6 +1458,7 @@ public class CanvasView extends View {
 
         if (pickNext && action == MotionEvent.ACTION_DOWN) { // eyedropper button armed
             pickNext = false;
+            pickOld = grey;
             picking = true;
             stroking = false;
             pickAt(e.getX(), e.getY());
@@ -1282,9 +1524,10 @@ public class CanvasView extends View {
                 addPt(pt[0], pt[1], e.getPressure());
                 smoothReset(pt[0], pt[1]);
                 record(pt[0], pt[1], e.getPressure());
+                tiltFrom(e, -1);
                 startAt(pt[0], pt[1], e.getPressure());
                 flush();
-                if (!isPen) postDelayed(pickHold, 450);
+                if (!isPen && holdAction != 2) postDelayed(pickHold, holdDelay);
                 postDelayed(shapeHold, 550);
                 break;
             case MotionEvent.ACTION_MOVE: {
@@ -1299,9 +1542,11 @@ public class CanvasView extends View {
                 }
                 for (int i = 0; i < e.getHistorySize(); i++) {
                     map(e.getHistoricalX(i), e.getHistoricalY(i));
+                    tiltFrom(e, i);
                     feed(e.getHistoricalPressure(i));
                 }
                 map(e.getX(), e.getY());
+                tiltFrom(e, -1);
                 feed(e.getPressure());
                 flush();
                 if (Math.hypot(e.getX() - holdSX, e.getY() - holdSY) > 6) {
@@ -1677,9 +1922,18 @@ public class CanvasView extends View {
         }
     }
 
+    /** Stylus tilt for the dab being drawn: 0 = upright, 1 = lying flat. */
+    private float tiltNow;
+    private void tiltFrom(MotionEvent e, int h) {
+        if (!penInput) { tiltNow = 0; return; }
+        float t = h < 0 ? e.getAxisValue(MotionEvent.AXIS_TILT) : e.getHistoricalAxisValue(MotionEvent.AXIS_TILT, 0, h);
+        tiltNow = Math.max(0, Math.min(1, t / 1.5708f));
+    }
+
     private void stampOne(float cx, float cy, float p) {
         Brush b = brush;
         float r = diameter(p) / 2f * taper();
+        if (b.tiltSize > 0) r *= 1 + b.tiltSize * tiltNow * 2.5f;
         if (b.jitterSize > 0) r *= 1 - b.jitterSize * rnd.nextFloat();
         if (b.scatter > 0) { // random offset around the stroke
             double ang = rnd.nextDouble() * Math.PI * 2, dist = rnd.nextDouble() * b.scatter * r * 4;
@@ -1688,7 +1942,7 @@ public class CanvasView extends View {
         r = Math.max(0.5f, r);
         float pr = pres(p);
         float alphaJ = b.jitterOpacity > 0 ? 1 - b.jitterOpacity * rnd.nextFloat() : 1f;
-        int a = (int) (255 * opacity * b.alpha * alphaJ * (b.minAlpha + (1 - b.minAlpha) * pr));
+        int a = (int) (255 * opacity * b.alpha * alphaJ * (b.minAlpha + (1 - b.minAlpha) * pr) * (1 - b.tiltOpacity * tiltNow * 0.85f));
         if (a <= 0) return;
         float soft = Math.max(1f, r * (1 - b.hard));
         int x0 = Math.max(0, (int) (cx - r - 1)), x1 = Math.min(docW - 1, (int) (cx + r + 1));
@@ -1926,7 +2180,7 @@ public class CanvasView extends View {
             scrubX = gX;
             downSX = e.getX(); downSY = e.getY();
             if (target == view) {
-                if (gCount == 1) postDelayed(pickHold, 450);
+                if (gCount == 1 && holdAction != 2) postDelayed(pickHold, holdDelay);
                 postDelayed(undoHold, undoHoldDelay);
             }
             return true;
@@ -1949,14 +2203,21 @@ public class CanvasView extends View {
                         if (scrubDir == 0 || dir == scrubDir) { scrubDir = dir; scrubX = m[0]; }
                         else if (Math.abs(m[0] - scrubX) > 40) { scrubFlips++; scrubDir = dir; scrubX = m[0]; }
                     }
-                    if (scrubFlips >= 3 && !scrubbed) { scrubbed = true; clearLayer(); }
+                    if (scrubFlips >= 3 && !scrubbed && gClear) { scrubbed = true; clearLayer(); }
                     gSwipeY += dy;
-                    if (!scrubbed && scrubFlips == 0 && gSwipeY > 120 * getResources().getDisplayMetrics().density) {
+                    if (gCopy && !scrubbed && scrubFlips == 0 && gSwipeY > 120 * getResources().getDisplayMetrics().density) {
                         scrubbed = true; // three-finger swipe down: copy & paste menu
                         if (onCopyMenu != null) onCopyMenu.run();
                     }
                 } else {
-                    if (target == moveT) { moveT.postTranslate(-snapOffX, -snapOffY); snapOffX = snapOffY = 0; } // un-snap, then follow the finger
+                    if (target == moveT) { // un-snap, then follow the finger
+                        moveT.postTranslate(-snapOffX, -snapOffY); snapOffX = snapOffY = 0;
+                        if (magA != 0 || magS != 1) {
+                            float[] cc = contentCentre();
+                            moveT.postRotate(-magA, cc[0], cc[1]); moveT.postScale(1 / magS, 1 / magS, cc[0], cc[1]);
+                            magA = 0; magS = 1;
+                        }
+                    }
                     target.postTranslate(dx, dy);
                     if (gDist > 0 && m[2] > 0) {
                         float s = m[2] / gDist;
@@ -1967,7 +2228,7 @@ public class CanvasView extends View {
                         gMoved += Math.abs(m[2] - gDist);
                         gScale *= s;
                     }
-                    if (target == moveT && snapping && xform == 0) snapMove();
+                    if (target == moveT && snapping && xform == 0) { magnetics(); snapMove(); }
                 }
                 gX = m[0]; gY = m[1]; gDist = m[2]; gAngle = m[3];
                 if (target == view && gCount >= 2 && onViewChanged != null) { // zoom % and angle, like Procreate's HUD
@@ -1984,7 +2245,7 @@ public class CanvasView extends View {
             case MotionEvent.ACTION_CANCEL:
                 gesture = false;
                 snapX = snapY = Float.NaN;
-                snapOffX = snapOffY = 0; // keep where it snapped
+                snapOffX = snapOffY = 0; magA = 0; magS = 1; // keep where it snapped
                 removeCallbacks(pickHold);
                 removeCallbacks(undoHold);
                 if (picking) { picking = false; break; }
@@ -1995,9 +2256,9 @@ public class CanvasView extends View {
                 if (target == view && action == MotionEvent.ACTION_UP) {
                     long dt = e.getEventTime() - gStart;
                     if (!holdUndoing && !scrubbed && dt < 300 && gMoved < 40) {
-                        if (gMax == 2) undo();
-                        else if (gMax == 3) redo();
-                        else if (gMax == 4 && onToggleUi != null) onToggleUi.run();
+                        if (gMax == 2) { if (gUndo) undo(); }
+                        else if (gMax == 3) { if (gRedo) redo(); }
+                        else if (gMax == 4 && gFull && onToggleUi != null) onToggleUi.run();
                     } else if (dt < 450 && gScale < 0.75f && gMax == 2) {
                         animateFit(); // quick pinch-in
                     }
@@ -2125,6 +2386,22 @@ public class CanvasView extends View {
         changed();
     }
 
+    /** Magnetics (Snapping on): rotation sticks to 15° steps and size to 25% steps when close. */
+    private void magnetics() {
+        float[] v = new float[9];
+        moveT.getValues(v);
+        float ang = (float) Math.toDegrees(Math.atan2(v[3], v[0]));
+        float sc = (float) Math.hypot(v[0], v[3]);
+        float ta = Math.round(ang / 15f) * 15f, ts = Math.max(0.25f, Math.round(sc * 4) / 4f);
+        float da = Math.abs(ang - ta) < 4 ? ta - ang : 0;
+        float ds = sc > 0 && Math.abs(sc - ts) / ts < 0.03f ? ts / sc : 1;
+        if (da == 0 && ds == 1) return;
+        float[] cc = contentCentre();
+        moveT.postScale(ds, ds, cc[0], cc[1]);
+        moveT.postRotate(da, cc[0], cc[1]);
+        magA = da; magS = ds;
+    }
+
     private float[] contentCentre() {
         float[] q = handlePoints();
         return new float[]{(q[0] + q[4]) / 2, (q[1] + q[5]) / 2};
@@ -2139,12 +2416,14 @@ public class CanvasView extends View {
         invalidate();
     }
 
-    public void rotate90() {
+    public void rotate90() { rotateBy(90); }
+
+    public void rotateBy(float deg) {
         if (tool != MOVE) return;
         beginMove();
         xfMark();
         float[] c = contentCentre();
-        moveT.postRotate(90, c[0], c[1]);
+        moveT.postRotate(deg, c[0], c[1]);
         invalidate();
     }
 
@@ -2160,9 +2439,10 @@ public class CanvasView extends View {
 
     private void resetWarp() {
         float x0 = srcCorners[0], y0 = srcCorners[1], x1 = srcCorners[4], y1 = srcCorners[5];
-        for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) {
-            warp[(r * 4 + c) * 2] = x0 + (x1 - x0) * c / 3f;
-            warp[(r * 4 + c) * 2 + 1] = y0 + (y1 - y0) * r / 3f;
+        int n = wn();
+        for (int r = 0; r < n; r++) for (int c = 0; c < n; c++) {
+            warp[(r * n + c) * 2] = x0 + (x1 - x0) * c / (n - 1f);
+            warp[(r * n + c) * 2 + 1] = y0 + (y1 - y0) * r / (n - 1f);
         }
     }
 
@@ -3109,11 +3389,28 @@ public class CanvasView extends View {
         return addLayer(l);
     }
 
+    private static final java.util.HashMap<String, android.graphics.Typeface> FONT_CACHE = new java.util.HashMap<>();
+
+    /** A system font family, or "file:name.ttf" for a font the user imported (kept in files/fonts). */
+    public static android.graphics.Typeface typeface(android.content.Context c, String font, boolean bold) {
+        android.graphics.Typeface base = null;
+        if (font != null && font.startsWith("file:")) {
+            base = FONT_CACHE.get(font);
+            if (base == null) {
+                try { base = android.graphics.Typeface.createFromFile(new java.io.File(new java.io.File(c.getFilesDir(), "fonts"), font.substring(5))); }
+                catch (Exception e) { base = android.graphics.Typeface.DEFAULT; }
+                FONT_CACHE.put(font, base);
+            }
+            return bold ? android.graphics.Typeface.create(base, android.graphics.Typeface.BOLD) : base;
+        }
+        return android.graphics.Typeface.create(font, bold ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+    }
+
     private void drawText(Layer l, TextInfo t, float cx, float cy) {
         android.text.TextPaint tp = new android.text.TextPaint(Paint.ANTI_ALIAS_FLAG);
         tp.setColor(Color.rgb(t.grey, t.grey, t.grey));
         tp.setTextSize(t.size);
-        tp.setTypeface(android.graphics.Typeface.create(t.font, t.bold ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL));
+        tp.setTypeface(typeface(getContext(), t.font, t.bold));
         android.text.Layout.Alignment al = t.align == 0 ? android.text.Layout.Alignment.ALIGN_NORMAL
                 : t.align == 2 ? android.text.Layout.Alignment.ALIGN_OPPOSITE : android.text.Layout.Alignment.ALIGN_CENTER;
         int width = Math.max(1, (int) (docW * 0.9f));
@@ -3157,13 +3454,14 @@ public class CanvasView extends View {
     private int moveUndoSize;
 
     private float[] xfState() {
-        float[] st = new float[9 + 9 + 8 + 32 + 1];
+        float[] st = new float[9 + 9 + 8 + 50 + 2];
         float[] m = new float[9];
         moveT.getValues(m); System.arraycopy(m, 0, st, 0, 9);
         poly.getValues(m); System.arraycopy(m, 0, st, 9, 9);
         System.arraycopy(dstCorners, 0, st, 18, 8);
-        System.arraycopy(warp, 0, st, 26, 32);
-        st[58] = xform;
+        System.arraycopy(warp, 0, st, 26, 50);
+        st[76] = xform;
+        st[77] = advMesh ? 1 : 0;
         return st;
     }
 
@@ -3171,8 +3469,9 @@ public class CanvasView extends View {
         moveT.setValues(java.util.Arrays.copyOfRange(st, 0, 9));
         poly.setValues(java.util.Arrays.copyOfRange(st, 9, 18));
         dstCorners = java.util.Arrays.copyOfRange(st, 18, 26);
-        System.arraycopy(st, 26, warp, 0, 32);
-        xform = (int) st[58];
+        System.arraycopy(st, 26, warp, 0, 50);
+        xform = (int) st[76];
+        advMesh = st[77] != 0;
         invalidate();
     }
 

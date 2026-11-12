@@ -199,6 +199,21 @@ final class Psd {
         }
     }
 
+    /** Just the flattened picture stored in a PSD (fast: skips decoding the layers). */
+    static Bitmap readComposite(InputStream raw) throws IOException {
+        DataInputStream in = new DataInputStream(new BufferedInputStream(raw, 65536));
+        if (in.readInt() != 0x38425053 || in.readUnsignedShort() != 1) throw new IOException("Not a PSD file");
+        skip(in, 6);
+        int channels = in.readUnsignedShort();
+        int h = in.readInt(), w = in.readInt();
+        int depth = in.readUnsignedShort(), mode = in.readUnsignedShort();
+        if (depth != 8 || (mode != 1 && mode != 3)) throw new IOException("Unsupported PSD");
+        skip(in, in.readInt());
+        skip(in, in.readInt());
+        skip(in, in.readInt() & 0xFFFFFFFFL);
+        return readMerged(in, w, h, channels, mode);
+    }
+
     private static Bitmap readMerged(DataInputStream in, int w, int h, int channels, int mode) throws IOException {
         int comp = in.readUnsignedShort();
         int nc = Math.min(channels, 4);
