@@ -651,6 +651,34 @@ public class CanvasView extends View {
 
     public Runnable onFrame;
 
+    private android.graphics.BitmapShader hatchShader;
+    private boolean hatchStrong;
+    private float hatchScale;
+
+    /** Diagonal stripes, a fixed size on screen whatever the zoom. */
+    private android.graphics.Shader hatch(boolean strong, float viewScale) {
+        if (hatchShader == null || hatchStrong != strong || Math.abs(hatchScale - viewScale) > 0.01f) {
+            int t = 16;
+            Bitmap tile = Bitmap.createBitmap(t, t, Bitmap.Config.ARGB_8888);
+            Canvas tc = new Canvas(tile);
+            Paint lp = new Paint(Paint.ANTI_ALIAS_FLAG);
+            lp.setStrokeWidth(3);
+            lp.setColor(strong ? 0x993D9BFF : 0x558E8E93);
+            for (int k = -1; k <= 1; k++) tc.drawLine(k * t, t, k * t + t, 0, lp);
+            hatchShader = new android.graphics.BitmapShader(tile, android.graphics.Shader.TileMode.REPEAT, android.graphics.Shader.TileMode.REPEAT);
+            Matrix m = new Matrix();
+            m.setScale(1 / viewScale, 1 / viewScale);
+            hatchShader.setLocalMatrix(m);
+            hatchStrong = strong;
+            hatchScale = viewScale;
+        }
+        return hatchShader;
+    }
+
+    /** Called when a new touch starts; return true to swallow it (e.g. it just closed a menu). */
+    public java.util.function.BooleanSupplier onTouchStart;
+    private boolean swallow;
+
     @Override
     protected void onDraw(Canvas c) {
         if (docW == 0) return;
@@ -704,9 +732,9 @@ public class CanvasView extends View {
                 c.drawLine(cx - (float) (Math.cos(a) * r), cy - (float) (Math.sin(a) * r), cx + (float) (Math.cos(a) * r), cy + (float) (Math.sin(a) * r), g);
             }
         }
-        if (selOverlay != null) { // dim what is NOT selected
+        if (selOverlay != null) { // diagonal hatching over what is NOT selected (stronger while selecting)
             Paint o = new Paint(Paint.FILTER_BITMAP_FLAG);
-            o.setColor(0x403D9BFF);
+            o.setShader(hatch(tool == SELECT, sc));
             c.drawBitmap(selOverlay, 0, 0, o);
         }
         if (selPath != null) {
@@ -859,6 +887,11 @@ public class CanvasView extends View {
     public boolean onTouchEvent(MotionEvent e) {
         if (docW == 0) return false;
         int action = e.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) swallow = onTouchStart != null && onTouchStart.getAsBoolean();
+        if (swallow) { // this touch only closed a panel: don't draw with it
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) swallow = false;
+            return true;
+        }
         int type = e.getToolType(0);
         boolean isPen = type == MotionEvent.TOOL_TYPE_STYLUS || type == MotionEvent.TOOL_TYPE_ERASER;
         if (isPen) stylusSeen = true;
@@ -1781,6 +1814,10 @@ public class CanvasView extends View {
                     m = new byte[docW * docH];
                     Fx.flood(px, docW, docH, sx, sy, autoThr, m);
                 } else {
+                    RectF bounds = new RectF();
+                    selPath.computeBounds(bounds, true);
+                    float minSide = 6 / view.mapRadius(1f); // ~6 screen pixels
+                    if (bounds.width() < minSide && bounds.height() < minSide) { selPath = null; invalidate(); break; } // a tap: no selection
                     selPath.close();
                     Bitmap b = Bitmap.createBitmap(docW, docH, Bitmap.Config.ALPHA_8);
                     Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);

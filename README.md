@@ -13,7 +13,7 @@ Layout matches Procreate so you can switch between the two easily:
 - **Sidebar** (left, or right via Actions): brush size, eyedropper, brush opacity, undo, redo.
 
 ### Tools
-- **Selection**: Automatic (tap; slide left/right to set threshold), Freehand, Rectangle, Ellipse; Add/Subtract,
+- **Selection**: tap Done (or the Selection icon) to go back to drawing; the selection stays, shown with light stripes. Tap the Selection icon again to deselect. Automatic (tap; slide left/right to set threshold), Freehand, Rectangle, Ellipse; Add/Subtract,
   Invert, Copy & Paste, Cut & Paste, Feather, Clear. Brushes, smudge, fills, adjustments and transforms stay inside the selection.
 - **Transform**: drag/pinch/twist (Uniform), Distort (drag corners), Flip H/V, Rotate 90°, Reset. Moves only the selection if there is one.
 - **Adjustments**: Gaussian Blur, Motion Blur, Perspective Blur, Noise, Sharpen, Bloom, Glitch, Halftone, Liquify

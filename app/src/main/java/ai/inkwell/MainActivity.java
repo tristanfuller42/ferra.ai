@@ -129,7 +129,11 @@ public class MainActivity extends Activity {
         gal.setTextSize(15);
         icon(left, Ui.MENU, ib, this::actionsMenu);
         adjustBtn = icon(left, Ui.ADJUST, ib, this::adjustMenu);
-        selectBtn = icon(left, Ui.SELECT, ib, v -> setTool(canvas.tool == CanvasView.SELECT ? CanvasView.DRAW : CanvasView.SELECT));
+        selectBtn = icon(left, Ui.SELECT, ib, v -> {
+            if (canvas.tool == CanvasView.SELECT) setTool(CanvasView.DRAW);   // done selecting: back to drawing
+            else if (canvas.sel != null) { canvas.clearSelection(); toast("Deselected"); } // like Procreate
+            else setTool(CanvasView.SELECT);
+        });
         moveBtn = icon(left, Ui.MOVE, ib, v -> setTool(canvas.tool == CanvasView.MOVE ? CanvasView.DRAW : CanvasView.MOVE));
         brushName = new TextView(this);
         brushName.setTextColor(0xFF9A9A9E);
@@ -168,6 +172,7 @@ public class MainActivity extends Activity {
         icon(side, Ui.UNDO, (int) (40 * dp), v -> canvas.undo());
         icon(side, Ui.REDO, (int) (40 * dp), v -> canvas.redo());
         canvas.onPicked = () -> pickBtn.setOn(false);
+        canvas.onTouchStart = this::closePanels;
         canvas.onCopyMenu = () -> {
             Ui.PopMenu m = new Ui.PopMenu(this, canvas, Gravity.CENTER);
             String[] items = {"Cut", "Copy", "Copy all", "Duplicate", "Cut & Paste", "Paste"};
@@ -545,6 +550,7 @@ public class MainActivity extends Activity {
         chip(b, "Clear", false, v -> canvas.clearSelection());
         chip(b, "Save", false, v -> saveSelection());
         chip(b, "Load", false, this::loadSelectionMenu);
+        chip(a, "Done", true, v -> setTool(CanvasView.DRAW));
         showBar(a, b);
     }
 
@@ -1503,6 +1509,19 @@ public class MainActivity extends Activity {
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
 
     private void full() { toast("Layer limit reached for this canvas size"); }
+
+    /** Tapping the canvas closes open menus and the Layers panel, like Procreate. Returns true if something closed. */
+    private boolean closePanels() {
+        boolean closed = false;
+        Ui.Pop p = Ui.Pop.latest;
+        if (p != null && p.c == this && p.win.isShowing()) { p.win.dismiss(); closed = true; } // only this screen's popovers
+        if (panel != null && panel.getVisibility() == View.VISIBLE) {
+            panel.setVisibility(View.GONE);
+            layersBtn.setOn(false);
+            closed = true;
+        }
+        return closed;
+    }
 
     private void togglePanel() {
         panel.setVisibility(panel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);

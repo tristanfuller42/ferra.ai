@@ -3,6 +3,7 @@ package t;
 import ai.inkwell.*;
 import android.graphics.Bitmap;
 import android.view.MotionEvent;
+import android.view.View;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -469,5 +470,51 @@ public class FeatureTest extends Base {
         assertEquals("reset", CanvasView.DEFAULTS.get("Ink pen")[1], (Float) call(again, "get", "streamline"), 0.001f);
         java.io.File f = (java.io.File) get(again, "file");
         if (f != null) f.delete();
+    }
+
+    @Test public void selection_tap_does_nothing_done_keeps_tap_icon_deselects() {
+        line(W * .3f, H * .3f, W * .7f, H * .6f);
+        View selBtn = (View) get(act, "selectBtn");
+        selBtn.performClick();                       // enter Selection
+        assertEquals(CanvasView.SELECT, cv.tool);
+        cv.selKind = 1;
+        stroke(new float[][]{{W * .5f, H * .5f}}, MotionEvent.TOOL_TYPE_FINGER, 1);  // a tap
+        assertNull("a tap makes no selection (no blue page)", cv.sel);
+        cv.selKind = 2;
+        stroke(new float[][]{{W * .3f, H * .3f}, {W * .5f, H * .5f}}, MotionEvent.TOOL_TYPE_FINGER, 1);
+        assertNotNull(cv.sel);
+        shot("60_selecting");
+        selBtn.performClick();                       // done: back to drawing, selection kept
+        assertEquals(CanvasView.DRAW, cv.tool);
+        assertNotNull(cv.sel);
+        settle();
+        shot("61_selection_while_drawing");
+        selBtn.performClick();                       // tap again: deselect
+        assertNull("icon deselects", cv.sel);
+        assertEquals(CanvasView.DRAW, cv.tool);
+    }
+
+    @Test public void tapping_canvas_closes_panels_without_drawing() {
+        call(act, "togglePanel");
+        settle();
+        View panel = (View) get(act, "panel");
+        assertEquals(View.VISIBLE, panel.getVisibility());
+        long ink = inkSum(L());
+        line(W * .3f, H * .5f, W * .6f, H * .5f);
+        assertEquals("panel closed", View.GONE, panel.getVisibility());
+        assertEquals("that touch did not draw", ink, inkSum(L()));
+        call(act, "pickGrey");
+        settle();
+        line(W * .3f, H * .5f, W * .6f, H * .5f);
+        Object pop = get(Class.class.cast(null) == null ? latest() : null, "win");
+        assertFalse("colour panel closed", ((android.widget.PopupWindow) pop).isShowing());
+        assertEquals(ink, inkSum(L()));
+        line(W * .3f, H * .5f, W * .6f, H * .5f);
+        assertTrue("next touch draws", inkSum(L()) > ink);
+    }
+
+    static Object latest() {
+        try { java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui$Pop").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
+        catch (Exception e) { throw new RuntimeException(e); }
     }
 }
