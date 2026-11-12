@@ -2336,11 +2336,56 @@ public class MainActivity extends Activity {
             "Hide/show layer", "Fit to screen", "Eyedropper", "Full screen", "Reference"};
     private android.widget.PopupWindow qmWin;
 
-    private int[] qmSlots() {
-        String[] p = prefs.getString("qm", "2,4,5,6,8,15").split(",");
-        int[] r = new int[6];
-        for (int i = 0; i < 6; i++) { try { r[i] = Integer.parseInt(p[i]); } catch (Exception e) { r[i] = i; } }
+    /** Slot contents: an action number, "b:<brush>" (paint with that brush) or "e:<brush>" (erase with it). */
+    private String[] qmSlots() {
+        String saved = prefs.getString("qm2", null);
+        String[] p = saved != null ? saved.split("\n", -1) : prefs.getString("qm", "2,4,5,6,8,15").split(",");
+        String[] r = new String[6];
+        for (int i = 0; i < 6; i++) r[i] = i < p.length && !p[i].isEmpty() ? p[i] : String.valueOf(i);
         return r;
+    }
+
+    private void saveQmSlots(String[] slots) { prefs.edit().putString("qm2", String.join("\n", slots)).apply(); }
+
+    private CanvasView.Brush brushNamed(String n) {
+        for (CanvasView.Brush b : CanvasView.BRUSHES) if (b.name.equals(n)) return b;
+        return null;
+    }
+
+    private String qmLabel(String tok) {
+        if (tok.startsWith("b:")) return tok.substring(2);
+        if (tok.startsWith("e:")) return tok.substring(2) + "\n(eraser)";
+        try { return QM_NAMES[Integer.parseInt(tok)]; } catch (Exception e) { return "?"; }
+    }
+
+    private void qmRun(String tok) {
+        if (tok.startsWith("b:") || tok.startsWith("e:")) { // switch to that brush for painting or erasing
+            CanvasView.Brush b = brushNamed(tok.substring(2));
+            if (b == null) { hud("That brush no longer exists"); return; }
+            int tool = tok.startsWith("b:") ? CanvasView.DRAW : CanvasView.ERASE;
+            setTool(tool);
+            canvas.brush = b;
+            storeTool(tool);
+            noteRecent(b);
+            hud((tool == CanvasView.DRAW ? "Brush: " : "Eraser: ") + b.name);
+            return;
+        }
+        try { qmRun(Integer.parseInt(tok)); } catch (NumberFormatException ignored) { }
+    }
+
+    /** Pick a brush for a QuickMenu slot (grouped by set). */
+    private void qmPickBrush(View anchor, boolean eraser, java.util.function.Consumer<String> done) {
+        Ui.Pop pop = new Ui.Pop(this, 260);
+        pop.title(eraser ? "Erase with…" : "Paint with…");
+        java.util.List<String> sets = new java.util.ArrayList<>(java.util.Arrays.asList(CanvasView.SETS));
+        for (String set : sets) {
+            boolean any = false;
+            for (CanvasView.Brush b : CanvasView.BRUSHES) if (b.set.equals(set)) any = true;
+            if (!any) continue;
+            pop.section(set);
+            for (CanvasView.Brush b : CanvasView.BRUSHES) if (b.set.equals(set)) pop.item(b.name, true, () -> done.accept((eraser ? "e:" : "b:") + b.name));
+        }
+        pop.show(anchor);
     }
 
     private void qmRun(int id) {
@@ -2372,11 +2417,11 @@ public class MainActivity extends Activity {
         if (qmWin != null) qmWin.dismiss();
         int size = (int) (230 * dp), btn = (int) (78 * dp);
         FrameLayout ring = new FrameLayout(this);
-        int[] slots = qmSlots();
+        String[] slots = qmSlots();
         for (int i = 0; i < 6; i++) {
             int k = i;
             TextView t = new TextView(this);
-            t.setText(QM_NAMES[slots[i]]);
+            t.setText(qmLabel(slots[i]));
             t.setTextColor(Color.WHITE);
             t.setTextSize(12);
             t.setGravity(Gravity.CENTER);
@@ -2391,15 +2436,16 @@ public class MainActivity extends Activity {
             lp.leftMargin = (int) (size / 2f + Math.cos(a) * (size / 2f - btn / 2f) - btn / 2f);
             lp.topMargin = (int) (size / 2f + Math.sin(a) * (size / 2f - btn / 2f) - btn / 2f);
             t.setOnClickListener(v -> { qmWin.dismiss(); qmRun(slots[k]); });
-            t.setOnLongClickListener(v -> { // choose what this slot does
+            t.setOnLongClickListener(v -> { // choose what this slot does: an action, a brush or an eraser
+                java.util.function.Consumer<String> set = tok -> { slots[k] = tok; saveQmSlots(slots); ((TextView) v).setText(qmLabel(tok)); };
                 Ui.PopMenu m = new Ui.PopMenu(this, v);
-                for (int j = 0; j < QM_NAMES.length; j++) m.getMenu().add(0, j, j, QM_NAMES[j]);
+                m.getMenu().add(0, 1000, 0, "A brush…");
+                m.getMenu().add(0, 1001, 1, "An eraser…");
+                for (int j = 0; j < QM_NAMES.length; j++) m.getMenu().add(0, j, j + 2, QM_NAMES[j]);
                 m.setOnMenuItemClickListener(it -> {
-                    slots[k] = it.getItemId();
-                    StringBuilder sb = new StringBuilder();
-                    for (int j = 0; j < 6; j++) sb.append(j > 0 ? "," : "").append(slots[j]);
-                    prefs.edit().putString("qm", sb.toString()).apply();
-                    ((TextView) v).setText(QM_NAMES[slots[k]]);
+                    int id = it.getItemId();
+                    if (id >= 1000) qmPickBrush(v, id == 1001, set);
+                    else set.accept(String.valueOf(id));
                     return true;
                 });
                 m.show();

@@ -308,4 +308,28 @@ public class BatchFourTest extends Base {
         assertTrue("vanishing point placed", set);
         settle(); shot("91_guide_on");
     }
+
+    @Test public void quickmenu_slots_can_hold_brushes_and_erasers() {
+        act.getSharedPreferences("inkwell", 0).edit().putString("qm2", "b:6B pencil\ne:Charcoal\n2\n4\n5\n6").commit();
+        call(act, "quickMenu", W / 2f, H / 2f); settle();
+        android.widget.PopupWindow w = (android.widget.PopupWindow) get(act, "qmWin");
+        android.view.ViewGroup ring = (android.view.ViewGroup) w.getContentView();
+        assertEquals("6B pencil", String.valueOf(((TextView) ring.getChildAt(0)).getText()));
+        assertTrue(String.valueOf(((TextView) ring.getChildAt(1)).getText()).contains("eraser"));
+        ring.getChildAt(1).performClick(); settle();
+        assertEquals(CanvasView.ERASE, cv.tool);
+        assertEquals("Charcoal", cv.brush.name);
+        call(act, "quickMenu", W / 2f, H / 2f); settle();
+        ((android.view.ViewGroup) ((android.widget.PopupWindow) get(act, "qmWin")).getContentView()).getChildAt(0).performClick(); settle();
+        assertEquals(CanvasView.DRAW, cv.tool);
+        assertEquals("6B pencil", cv.brush.name);
+        call(act, "setTool", CanvasView.ERASE);
+        assertEquals("the eraser keeps the brush the QuickMenu gave it", "Charcoal", cv.brush.name);
+        // picking a brush for a slot saves it
+        String[] slots = (String[]) call(act, "qmSlots");
+        slots[2] = "b:Ink pen";
+        call(act, "saveQmSlots", (Object) slots);
+        assertEquals("b:Ink pen", ((String[]) call(act, "qmSlots"))[2]);
+        call(act, "setTool", CanvasView.DRAW);
+    }
 }

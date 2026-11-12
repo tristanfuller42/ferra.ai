@@ -71,7 +71,7 @@ Layout matches Procreate so you can switch between the two easily:
 - **Eyedropper ring**: new grey on top, previous grey below.
 - **QuickShape**: also arc, triangle and polyline (all with edit handles; second finger = equilateral / 15° segments).
 - **QuickMenu**: 6 shortcuts in a ring. Prefs → Gesture controls: open it with touch-and-hold or the sidebar square button;
-  long-press a slot to change it.
+  long-press a slot to change it: an action, a brush ("A brush…") or an eraser ("An eraser…").
 - **Gesture controls**: choose touch-and-hold action and delay; switch two/three/four-finger shortcuts on or off.
 - **Layers**: two-finger swipe right on a layer = Alpha Lock; two-finger hold = select its contents.
 - **Brush Library**: Recent set; drag ≡ to reorder; long-press a brush (or a set name) to export `.inkbrush` / `.inkbrushset`.
