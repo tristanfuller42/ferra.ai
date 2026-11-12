@@ -434,7 +434,7 @@ public class BatchFourTest extends Base {
     }
 
     @Test public void halftone_brush_one_grid_no_double_up() {
-        cv.brush = brushNamed("Halftone");
+        cv.brush = brushNamed("Halftone grid");
         cv.size = 120;
         cv.grey = 0;
         pen(new float[][]{{W * .3f, H * .5f}, {W * .5f, H * .5f}});
@@ -537,5 +537,33 @@ public class BatchFourTest extends Base {
         assertEquals("no empty Transform undo step", undoSteps, ((List<?>) get(cv, "undoList")).size());
         cv.undo();
         assertEquals("undo still takes back the stroke", 0, inkSum(L()));
+    }
+
+    @Test public void dragging_a_layer_opens_a_gap() {
+        cv.layers.get(0).name = "A";
+        cv.addLayer(cv.newLayer("B"));
+        cv.addLayer(cv.newLayer("C")); // list top to bottom: C, B, A
+        call(act, "togglePanel"); settle();
+        android.view.ViewGroup list = (android.view.ViewGroup) get(act, "layerList");
+        View rowC = null, rowB = null;
+        for (int k = 0; k < list.getChildCount(); k++) { View c = list.getChildAt(k); if (Integer.valueOf(2).equals(c.getTag())) rowC = c; if (Integer.valueOf(1).equals(c.getTag())) rowB = c; }
+        int[] l = new int[2]; rowC.getLocationOnScreen(l);
+        float x = l[0] + rowC.getWidth() * .5f, y = l[1] + rowC.getHeight() / 2f, hgt = rowC.getHeight();
+        View d = act.getWindow().getDecorView();
+        t0 = android.os.SystemClock.uptimeMillis();
+        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0, MotionEvent.ACTION_DOWN, x, y, 0));
+        ShadowLooper.idleMainLooper(450, TimeUnit.MILLISECONDS); // long-press: pick it up
+        for (int k = 1; k <= 6; k++) { d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 500 + k * 20, MotionEvent.ACTION_MOVE, x, y + hgt * 1.2f * k / 6, 0)); ShadowLooper.idleMainLooper(30, TimeUnit.MILLISECONDS); }
+        ShadowLooper.idleMainLooper(300, TimeUnit.MILLISECONDS);
+        assertEquals("B slid up out of the way", -hgt, rowB.getTranslationY(), 2f);
+        settle(); shot("98_layer_gap");
+        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 800, MotionEvent.ACTION_UP, x, y + hgt * 1.2f, 0));
+        settle();
+        assertEquals("C now below B", "C", cv.layers.get(1).name);
+        assertEquals("B", cv.layers.get(2).name);
+        // the original halftone is still there next to the grid ones
+        assertNotNull(brushNamed("Halftone"));
+        assertNotNull(brushNamed("Halftone grid"));
+        assertEquals(0f, (Float) call(brushNamed("Halftone"), "get", "pattern"), 0);
     }
 }

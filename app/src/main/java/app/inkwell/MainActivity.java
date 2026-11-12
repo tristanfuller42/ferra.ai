@@ -2730,7 +2730,7 @@ public class MainActivity extends Activity {
                     row.postDelayed(startDrag, 380);
                     return false;
                 case android.view.MotionEvent.ACTION_MOVE:
-                    if (st[2] == 1) { row.setTranslationY(dy); return true; }
+                    if (st[2] == 1) { row.setTranslationY(dy); makeRoom(row, idx); return true; }
                     if (st[2] == 0 && Math.hypot(dx, dy) > slop) {
                         row.removeCallbacks(startDrag);
                         if (Math.abs(dx) > Math.abs(dy)) { // sideways: this is a swipe, stop the list from scrolling
@@ -2763,20 +2763,48 @@ public class MainActivity extends Activity {
         };
     }
 
-    /** Ends a long-press drag: moves the layer to the row under the finger. */
-    private void drop(View row, int idx, float y) {
+    private int dragTarget = -1; // layer index the dragged row will land on
+
+    /**
+     * While a layer is dragged, the rows it passes slide out of the way (animated) to open a gap where it will land,
+     * like Procreate. Rows are compared by their resting positions, so the gap follows the finger smoothly.
+     */
+    private void makeRoom(View row, int idx) {
+        float centre = row.getTop() + row.getHeight() / 2f + row.getTranslationY();
         int target = idx;
         for (int c = 0; c < layerList.getChildCount(); c++) {
             View ch = layerList.getChildAt(c);
             if (!(ch.getTag() instanceof Integer) || ch == row) continue;
-            int[] loc = new int[2];
-            ch.getLocationOnScreen(loc);
-            if (y >= loc[1] && y < loc[1] + ch.getHeight()) target = (Integer) ch.getTag();
+            float mid = ch.getTop() + ch.getHeight() / 2f;
+            float shift = 0;
+            if (ch.getTop() > row.getTop() && mid < centre) { shift = -row.getHeight(); target = (Integer) ch.getTag(); } // below, passed: move up
+            else if (ch.getTop() < row.getTop() && mid > centre) { // above, passed: move down
+                shift = row.getHeight();
+                if (target == idx || (Integer) ch.getTag() > target) target = (Integer) ch.getTag();
+            }
+            if (ch.getTag(R_SHIFT) == null || (Float) ch.getTag(R_SHIFT) != shift) {
+                ch.setTag(R_SHIFT, shift);
+                ch.animate().translationY(shift).setDuration(140).start();
+            }
         }
-        row.setTranslationY(0);
+        dragTarget = target;
+    }
+
+    private static final int R_SHIFT = 0x7f0f0001; // view tag key for a row's slide
+
+    /** Ends a long-press drag: moves the layer into the gap. */
+    private void drop(View row, int idx, float y) {
+        int target = dragTarget >= 0 ? dragTarget : idx;
+        dragTarget = -1;
+        for (int c = 0; c < layerList.getChildCount(); c++) {
+            View ch = layerList.getChildAt(c);
+            ch.animate().cancel();
+            ch.setTranslationY(0);
+            ch.setTag(R_SHIFT, null);
+        }
         row.setElevation(0);
         row.setAlpha(1);
-        canvas.moveLayerTo(idx, target);
+        if (target != idx) canvas.moveLayerTo(idx, target); else refreshPanel();
     }
 
     private CanvasView.Layer swiped; // layer whose row shows Lock / Duplicate / Delete

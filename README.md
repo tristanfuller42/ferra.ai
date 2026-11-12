@@ -93,7 +93,7 @@ Layout matches Procreate so you can switch between the two easily:
 - **Drawing Assist per layer**: the guide's Assisted drawing switch (and layer options) applies to the current layer.
 - **Share**: PNG files (each layer, into a folder) and Animated PNG.
 - **Text**: letter spacing, line spacing, underline, outline; layer options → Rasterize text.
-- **Halftone brushes** (Textures → Halftone, Halftone coarse): one dot grid fixed to the canvas; overlapping strokes
+- **Halftone brushes** (Textures): Halftone (stamped dots), plus Halftone grid and Halftone grid coarse: one dot grid fixed to the canvas; overlapping strokes
   never double up, they just reveal more of the same dots. Any brush can do this: Brush Studio → Rendering → Halftone grid.
 - **More brushes** (about 50): new sets Calligraphy, Charcoals, Drawing, Textures, Spray paints, Elements.
 - **Shape / Grain source**: Brush Studio → Shape or Grain → Import a picture (Invert, or go back to round / no grain).
@@ -133,7 +133,7 @@ long-press to rename, duplicate or delete. Drawings save automatically.
   - Draw and **hold** at the end = QuickShape: snaps to a straight line (keep holding and move to adjust),
     or an ellipse if the stroke ends near where it started.
 - **Move tool**: drag moves the current layer; pinch/twist scales and rotates it. Applied when you pick another tool.
-- **Layers**: ＋ adds a layer. Drag to reorder, swipe left for Lock/Duplicate/Delete, pinch rows to merge, tap the
+- **Layers**: ＋ adds a layer. Long-press and drag to reorder (the other layers slide aside to show where it lands), swipe left for Lock/Duplicate/Delete, pinch rows to merge, tap the
   current layer for options (clear, merge down, mask, etc.), dot to hide/show, slider for opacity.
 - Once a stylus is used, one finger **erases** (with the Eraser's brush and size). Prefs → Finger when using a stylus:
   Navigate / Paint / Erase. Two fingers still zoom and pan.

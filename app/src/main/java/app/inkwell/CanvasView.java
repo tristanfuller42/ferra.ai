@@ -437,8 +437,9 @@ public class CanvasView extends View {
         new Brush("Felt tip",       0.9f,  0.9f,  0.8f, 0.85f, 0f,   0.06f).with("Drawing", 0.25f, 0f, 0f),
         // Textures
         new Brush("Stipple",        1f,    1f,    1f,   0.9f, 0f,    0.6f).with("Textures", 0f, 0f, 0f).tipKind(8).p("scatter", 0.3f),
-        new Brush("Halftone",       1f,    1f,    1f,   1f,   0f,    0.15f).with("Textures", 0f, 0f, 0f).p("pattern", 1).p("patternScale", 12).p("patternDot", 0.35f),
-        new Brush("Halftone coarse", 1f,   1f,    1f,   1f,   0f,    0.15f).with("Textures", 0f, 0f, 0f).p("pattern", 1).p("patternScale", 26).p("patternDot", 0.38f),
+        new Brush("Halftone",       1f,    1f,    1f,   0.9f, 0f,    0.9f).with("Textures", 0f, 0f, 0f).tipKind(10),
+        new Brush("Halftone grid",  1f,    1f,    1f,   1f,   0f,    0.15f).with("Textures", 0f, 0f, 0f).p("pattern", 1).p("patternScale", 12).p("patternDot", 0.35f),
+        new Brush("Halftone grid coarse", 1f, 1f, 1f,   1f,   0f,    0.15f).with("Textures", 0f, 0f, 0f).p("pattern", 1).p("patternScale", 26).p("patternDot", 0.38f),
         new Brush("Crosshatch",     1f,    0.5f,  1f,   0.9f, 0f,    0.7f).with("Textures", 0f, 0f, 0f).tipKind(11),
         new Brush("Grunge",         0.8f,  0.4f,  0.9f, 0.5f, 0.7f,  0.25f).with("Textures", 0f, 0f, 0f).tipKind(6).p("scatter", 0.3f).p("jitterSize", 0.4f).p("grainScale", 2.5f),
         new Brush("Paper texture",  1f,    0.2f,  0.6f, 0f,   1f,    0.1f).with("Textures", 0f, 0f, 0f).p("grainScale", 1.5f),
