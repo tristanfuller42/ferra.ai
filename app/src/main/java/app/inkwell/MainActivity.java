@@ -778,8 +778,8 @@ public class MainActivity extends Activity {
                     v -> { float[][] c = curveView.arrays(); int[] l = Fx.curve(c[0], c[1]); return (s, o) -> Fx.lut(s, o, l); }),
             new Adj("Threshold", new String[]{"Level"}, new float[]{1}, new float[]{254}, new float[]{128},
                     v -> (s, o) -> Fx.lut(s, o, Fx.threshold(Math.round(v[0])))),
-            new Adj("Posterize", new String[]{"Levels"}, new float[]{2}, new float[]{16}, new float[]{4},
-                    v -> (s, o) -> Fx.lut(s, o, Fx.posterize(Math.round(v[0])))),
+            new Adj("Posterize", new String[]{"Levels", "Threshold"}, new float[]{2, -0.5f}, new float[]{32, 0.5f}, new float[]{4, 0},
+                    v -> (s, o) -> Fx.lut(s, o, Fx.posterize(Math.round(v[0]), v[1]))),
             new Adj("Invert", new String[0], new float[0], new float[0], new float[0],
                     v -> (s, o) -> Fx.lut(s, o, Fx.invert())),
         };
@@ -827,15 +827,21 @@ public class MainActivity extends Activity {
         for (int i = 0; i < a.params.length; i++) {
             int k = i;
             TextView lab = new TextView(this);
-            lab.setText(a.params[i]);
             lab.setTextColor(0xFF9A9A9E);
             box.addView(lab);
+            Runnable showVal = () -> { // the value next to the name, for fine control
+                float v = adjVals[k];
+                boolean whole = a.max[k] - a.min[k] > 3;
+                lab.setText(a.params[k] + "   " + (whole ? String.valueOf(Math.round(v)) : (v > 0 && a.min[k] < 0 ? "+" : "") + Math.round(v * 100) + "%"));
+            };
+            showVal.run();
             SeekBar sb = new SeekBar(this);
             sb.setMax(1000);
             sb.setProgress(Math.round((a.def[i] - a.min[i]) / (a.max[i] - a.min[i]) * 1000));
             sb.setOnSeekBarChangeListener(new Slider() {
                 public void onProgressChanged(SeekBar s, int p, boolean u) {
                     adjVals[k] = a.min[k] + (a.max[k] - a.min[k]) * p / 1000f;
+                    showVal.run();
                     canvas.previewAdjust(a.fn.apply(adjVals));
                 }
             });
@@ -845,7 +851,22 @@ public class MainActivity extends Activity {
         if (a.name.equals("Curves")) {
             curveView = new Ui.CurveView(this);
             curveView.listener = () -> canvas.previewAdjust(a.fn.apply(adjVals));
-            box.addView(curveView, new LinearLayout.LayoutParams((int) (220 * dp), (int) (220 * dp)));
+            int[] hist = new int[256]; // the layer's greys, shown behind the curve
+            Bitmap lb = canvas.cur().bmp;
+            int step = Math.max(1, (int) Math.sqrt((double) lb.getWidth() * lb.getHeight() / 250000));
+            int[] row = new int[lb.getWidth()];
+            for (int y = 0; y < lb.getHeight(); y += step) {
+                lb.getPixels(row, 0, lb.getWidth(), 0, y, lb.getWidth(), 1);
+                for (int x = 0; x < row.length; x += step) if ((row[x] >>> 24) > 20) hist[row[x] & 255]++;
+            }
+            curveView.hist = hist;
+            int side = (int) Math.min(300 * dp, getResources().getDisplayMetrics().widthPixels - 48 * dp);
+            box.addView(curveView, new LinearLayout.LayoutParams(side, (int) (side * 0.8f)));
+            TextView tip = new TextView(this);
+            tip.setText("Tap the line: add a point · drag it · double-tap: remove");
+            tip.setTextColor(0xFF8E8E93);
+            tip.setTextSize(12);
+            box.addView(tip);
         }
         LinearLayout btns = barRow();
         chip(btns, "Reset", false, v -> {
@@ -1834,6 +1855,7 @@ public class MainActivity extends Activity {
     /** Brush Library, like Procreate: brush sets on the left, brushes with stroke previews on the right. */
     private void pickBrush() {
         if (libSet == null) libSet = canvas.brush.set;
+        java.util.List<CanvasView.Brush> recentAtOpen = recentBrushes(); // the Recent list keeps its order until the library closes
         Ui.Pop pop = new Ui.Pop(this, 440);
         LinearLayout head = barRow();
         head.setPadding((int) (16 * dp), 0, (int) (8 * dp), 0);
@@ -1864,7 +1886,7 @@ public class MainActivity extends Activity {
             sets.removeAllViews();
             list.removeAllViews();
             java.util.List<String> setNames = new java.util.ArrayList<>();
-            if (!recentBrushes().isEmpty()) setNames.add("Recent");
+            if (!recentAtOpen.isEmpty()) setNames.add("Recent");
             setNames.addAll(java.util.Arrays.asList(CanvasView.SETS));
             for (String set : setNames) {
                 boolean any = set.equals("Recent");
@@ -1879,7 +1901,7 @@ public class MainActivity extends Activity {
                 st.setBackgroundColor(on ? Ui.ACCENT : 0);
                 st.setOnClickListener(v -> { libSet = set; fill[0].run(); });
                 st.setOnLongClickListener(v -> { // export a whole set
-                    java.util.List<CanvasView.Brush> bs = set.equals("Recent") ? recentBrushes() : new java.util.ArrayList<>();
+                    java.util.List<CanvasView.Brush> bs = set.equals("Recent") ? new java.util.ArrayList<>(recentAtOpen) : new java.util.ArrayList<>();
                     if (!set.equals("Recent")) for (CanvasView.Brush b : CanvasView.BRUSHES) if (b.set.equals(set)) bs.add(b);
                     if (bs.isEmpty()) return true;
                     Ui.Pop sp = new Ui.Pop(this, 220);
@@ -1891,7 +1913,7 @@ public class MainActivity extends Activity {
             }
             boolean recent = "Recent".equals(libSet);
             java.util.List<CanvasView.Brush> shown = new java.util.ArrayList<>();
-            if (recent) shown.addAll(recentBrushes());
+            if (recent) shown.addAll(recentAtOpen);
             else for (CanvasView.Brush br : CanvasView.BRUSHES) if (br.set.equals(libSet)) shown.add(br);
             for (CanvasView.Brush br : shown) {
                 LinearLayout outer = new LinearLayout(this);

@@ -29,10 +29,16 @@ final class Fx {
 
     static int[] threshold(int level) { int[] l = new int[256]; for (int i = 0; i < 256; i++) l[i] = i >= level ? 255 : 0; return l; }
 
-    static int[] posterize(int levels) {
+    static int[] posterize(int levels) { return posterize(levels, 0); }
+
+    /** Posterize with a threshold shift (-0.5..0.5): moves where each step to the next grey happens (darker or lighter). */
+    static int[] posterize(int levels, float shift) {
         int[] l = new int[256];
         int n = Math.max(2, levels) - 1;
-        for (int i = 0; i < 256; i++) l[i] = Math.round(Math.round(i * n / 255f) * 255f / n);
+        for (int i = 0; i < 256; i++) {
+            int band = Math.max(0, Math.min(n, Math.round(i * n / 255f - shift)));
+            l[i] = Math.round(band * 255f / n);
+        }
         return l;
     }
 

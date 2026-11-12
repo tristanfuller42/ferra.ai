@@ -130,10 +130,16 @@ final class Ui {
     }
 
     /** Curves editor: tap to add a point, drag to move it, drag a point off the side to remove it. */
+    /**
+     * Curves like Procreate: histogram behind the line, tap the line to add a point (it lands on the line), drag points
+     * (they can't pass their neighbours), double-tap a point or drag it off the graph to remove it.
+     */
     static final class CurveView extends View {
         final java.util.ArrayList<float[]> pts = new java.util.ArrayList<>();
         Runnable listener;
-        private int drag = -1;
+        int[] hist; // 256 bins of the layer's greys, drawn faintly behind the curve
+        private int drag = -1, lastTapped = -1;
+        private long lastTap;
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         CurveView(Context c) { super(c); reset(); }
@@ -152,16 +158,33 @@ final class Ui {
             return new float[][]{xs, ys};
         }
 
+        /** Inset so the end points are fully visible. */
+        private float pad() { return 11 * getResources().getDisplayMetrics().density; }
+
         @Override
         protected void onDraw(Canvas c) {
-            float w = getWidth(), h = getHeight(), d = getResources().getDisplayMetrics().density;
+            float d = getResources().getDisplayMetrics().density, pd = pad();
             p.setStyle(Paint.Style.FILL);
             p.setColor(0xFF1C1C1E);
-            c.drawRect(0, 0, w, h, p);
+            c.drawRoundRect(new RectF(0, 0, getWidth(), getHeight()), 8 * d, 8 * d, p);
+            c.save();
+            c.translate(pd, pd);
+            float w = getWidth() - 2 * pd, h = getHeight() - 2 * pd;
+            if (hist != null) { // histogram
+                int max = 1;
+                for (int v : hist) max = Math.max(max, v);
+                p.setColor(0xFF3A3A3C);
+                for (int i = 0; i < 256; i++) {
+                    float bh = h * (float) Math.sqrt(hist[i] / (double) max) * 0.95f;
+                    c.drawRect(w * i / 256f, h - bh, w * (i + 1) / 256f + 0.5f, h, p);
+                }
+            }
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(1);
             p.setColor(0xFF48484A);
             for (int i = 1; i < 4; i++) { c.drawLine(w * i / 4, 0, w * i / 4, h, p); c.drawLine(0, h * i / 4, w, h * i / 4, p); }
+            p.setColor(0xFF636366);
+            c.drawLine(0, h, w, 0, p); // the "no change" line
             float[][] a = arrays();
             int[] lut = Fx.curve(a[0], a[1]);
             Path path = new Path();
@@ -169,30 +192,70 @@ final class Ui {
                 float x = w * i / 255f, y = h - h * lut[i] / 255f;
                 if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
             }
-            p.setStrokeWidth(2 * d);
+            p.setStrokeWidth(2.5f * d);
             p.setColor(Color.WHITE);
             c.drawPath(path, p);
-            p.setStyle(Paint.Style.FILL);
-            for (float[] q : pts) c.drawCircle(q[0] * w, h - q[1] * h, 6 * d, p);
+            for (int i = 0; i < pts.size(); i++) {
+                float[] q = pts.get(i);
+                p.setStyle(Paint.Style.FILL);
+                p.setColor(i == drag ? ACCENT : Color.WHITE);
+                c.drawCircle(q[0] * w, h - q[1] * h, 8 * d, p);
+                p.setStyle(Paint.Style.STROKE);
+                p.setColor(0xFF1C1C1E);
+                p.setStrokeWidth(2 * d);
+                c.drawCircle(q[0] * w, h - q[1] * h, 8 * d, p);
+            }
+            if (drag >= 0 && drag < pts.size()) { // input -> output readout
+                float[] q = pts.get(drag);
+                p.setStyle(Paint.Style.FILL);
+                p.setColor(Color.WHITE);
+                p.setTextSize(13 * d);
+                c.drawText("In " + Math.round(q[0] * 100) + "%  →  Out " + Math.round(q[1] * 100) + "%", 4 * d, 14 * d, p);
+            }
+            c.restore();
         }
 
         @Override
         public boolean onTouchEvent(MotionEvent e) {
-            float w = getWidth(), h = getHeight(), d = getResources().getDisplayMetrics().density;
-            float x = e.getX() / w, y = 1 - e.getY() / h;
+            float d = getResources().getDisplayMetrics().density, pd = pad();
+            float w = getWidth() - 2 * pd, h = getHeight() - 2 * pd;
+            float x = (e.getX() - pd) / w, y = 1 - (e.getY() - pd) / h;
             switch (e.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
+                case MotionEvent.ACTION_DOWN: {
+                    arrays(); // keep points in order
                     drag = -1;
-                    for (int i = 0; i < pts.size(); i++)
-                        if (Math.hypot((pts.get(i)[0] - x) * w, (pts.get(i)[1] - y) * h) < 24 * d) drag = i;
-                    if (drag < 0) { pts.add(new float[]{clamp(x), clamp(y)}); drag = pts.size() - 1; }
+                    float best = 30 * d;
+                    for (int i = 0; i < pts.size(); i++) {
+                        float dd = (float) Math.hypot((pts.get(i)[0] - x) * w, (pts.get(i)[1] - y) * h);
+                        if (dd < best) { best = dd; drag = i; }
+                    }
+                    long now = e.getEventTime();
+                    if (drag >= 0 && drag == lastTapped && now - lastTap < 300 && drag > 0 && drag < pts.size() - 1) {
+                        pts.remove(drag); // double-tap: remove the point
+                        drag = -1; lastTapped = -1;
+                        break;
+                    }
+                    lastTapped = drag; lastTap = now;
+                    if (drag < 0) { // tap anywhere: a new point exactly on the curve at that input, so nothing jumps
+                        float[][] a = arrays();
+                        int[] lut = Fx.curve(a[0], a[1]);
+                        float cx = clamp(x);
+                        pts.add(new float[]{cx, lut[Math.round(cx * 255)] / 255f});
+                        arrays();
+                        for (int i = 0; i < pts.size(); i++) if (pts.get(i)[0] == cx) drag = i;
+                        lastTapped = drag;
+                    }
                     break;
-                case MotionEvent.ACTION_MOVE:
+                }
+                case MotionEvent.ACTION_MOVE: {
                     if (drag < 0) break;
-                    if ((x < -0.15f || x > 1.15f) && pts.size() > 2) { pts.remove(drag); drag = -1; break; }
-                    pts.get(drag)[0] = clamp(x);
+                    boolean end = drag == 0 || drag == pts.size() - 1;
+                    if (!end && (y < -0.2f || y > 1.2f || x < -0.15f || x > 1.15f)) { pts.remove(drag); drag = -1; break; } // dragged off
+                    float lo = drag > 0 ? pts.get(drag - 1)[0] + 0.01f : 0, hi = drag < pts.size() - 1 ? pts.get(drag + 1)[0] - 0.01f : 1;
+                    pts.get(drag)[0] = Math.max(lo, Math.min(hi, clamp(x)));
                     pts.get(drag)[1] = clamp(y);
                     break;
+                }
                 default:
                     drag = -1;
             }

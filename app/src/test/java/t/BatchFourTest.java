@@ -459,4 +459,71 @@ public class BatchFourTest extends Base {
         assertTrue("halftone dots: " + ink + "/" + n, ink > n * 0.15 && ink < n * 0.7);
         settle(); shot("96_halftone");
     }
+
+    @Test public void curves_like_procreate_and_posterize_threshold() {
+        pen(new float[][]{{W * .3f, H * .5f}, {W * .7f, H * .5f}});
+        Object[] adjs = (Object[]) call(act, "adjustments");
+        Object curves = null, post = null;
+        for (Object a : adjs) { if (get(a, "name").equals("Curves")) curves = a; if (get(a, "name").equals("Posterize")) post = a; }
+        call(act, "startAdjust", curves); settle();
+        View cvw = (View) get(act, "curveView");
+        assertNotNull("histogram drawn behind", get(cvw, "hist"));
+        float w = cvw.getWidth(), h = cvw.getHeight();
+        t0 = android.os.SystemClock.uptimeMillis();
+        // tap the middle: a point lands ON the line (no jump)
+        cvw.dispatchTouchEvent(MotionEvent.obtain(t0, t0, MotionEvent.ACTION_DOWN, w / 2, h * 0.1f, 0));
+        cvw.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 20, MotionEvent.ACTION_UP, w / 2, h * 0.1f, 0));
+        List<?> pts = (List<?>) get(cvw, "pts");
+        assertEquals(3, pts.size());
+        assertEquals("added on the line", 0.5f, ((float[]) pts.get(1))[1], 0.02f);
+        // drag it up: brighter mid-tones
+        cvw.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 1000, MotionEvent.ACTION_DOWN, w / 2, h / 2, 0));
+        cvw.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 1050, MotionEvent.ACTION_MOVE, w / 2, h * 0.25f, 0));
+        cvw.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 1100, MotionEvent.ACTION_UP, w / 2, h * 0.25f, 0));
+        assertEquals(0.75f, ((float[]) pts.get(1))[1], 0.03f);
+        settle(); shot("97_curves");
+        // double-tap removes it
+        cvw.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 2000, MotionEvent.ACTION_DOWN, w / 2, h * 0.25f, 0));
+        cvw.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 2030, MotionEvent.ACTION_UP, w / 2, h * 0.25f, 0));
+        cvw.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 2150, MotionEvent.ACTION_DOWN, w / 2, h * 0.25f, 0));
+        cvw.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 2180, MotionEvent.ACTION_UP, w / 2, h * 0.25f, 0));
+        assertEquals("double-tap removed the point", 2, pts.size());
+        call(act, "finishAdjust", false);
+        // posterize threshold moves where the steps happen
+        int[] a = (int[]) callStatic("posterize", 4, 0f), b = (int[]) callStatic("posterize", 4, 0.3f);
+        assertFalse(java.util.Arrays.equals(a, b));
+        call(act, "startAdjust", post); settle();
+        TextView lab = (TextView) UiTest.find((View) get(act, "bottom"), "Threshold", true);
+        assertNotNull("threshold slider shown", lab);
+        call(act, "finishAdjust", false);
+    }
+
+    Object callStatic(String name, Object... args) {
+        try {
+            for (java.lang.reflect.Method m : Class.forName("app.inkwell.Fx").getDeclaredMethods())
+                if (m.getName().equals(name) && m.getParameterCount() == args.length) { m.setAccessible(true); return m.invoke(null, args); }
+        } catch (Exception e) { throw new RuntimeException(e); }
+        throw new RuntimeException("no " + name);
+    }
+
+    @Test public void recent_brushes_keep_their_order_while_the_library_is_open() {
+        call(act, "noteRecent", brushNamed("Charcoal"));
+        call(act, "noteRecent", brushNamed("Ink pen"));
+        set(act, "libSet", "Recent");
+        call(act, "pickBrush"); settle();
+        Object pop = UiTest.latestPop();
+        View box = (View) get(pop, "box");
+        View second = UiTest.find(box, "Charcoal"); // exact: not the "Charcoals" set
+        assertNotNull(second);
+        ((View) second.getParent()).performClick(); settle(); // pick Charcoal: it becomes most recent...
+        View first = UiTest.find(box, "Ink pen", true);
+        int[] p1 = new int[2], p2 = new int[2];
+        first.getLocationOnScreen(p1);
+        View now = UiTest.find(box, "Charcoal   ·  tap again to edit"); // the picked brush's row
+        assertNotNull(now);
+        now.getLocationOnScreen(p2);
+        assertTrue("...but the list doesn't reorder while open", p1[1] < p2[1]);
+        ((android.widget.PopupWindow) get(pop, "win")).dismiss();
+        assertEquals("next time it is first", "Charcoal", ((CanvasView.Brush) ((List<?>) call(act, "recentBrushes")).get(0)).name);
+    }
 }
