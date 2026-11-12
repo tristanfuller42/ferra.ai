@@ -197,7 +197,7 @@ public class BatchThreeTest extends Base {
         assertTrue("heavy glaze builds up: " + light + " vs " + heavy, heavy > light + 30);
         // multiply: grey over grey gets darker than normal
         cv.opacity = 1f;
-        cv.grey = 128; cv.fillLayer();
+        cv.color = gc(128); cv.fillLayer();
         put(b, "blend", 1f);
         stroke(new float[][]{{W * .3f, H * .3f}, {W * .45f, H * .3f}, {W * .6f, H * .3f}}, MotionEvent.TOOL_TYPE_STYLUS, 1);
         int[] d = toDoc(W * .45f, H * .3f);

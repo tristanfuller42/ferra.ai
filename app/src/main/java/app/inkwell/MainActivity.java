@@ -38,7 +38,7 @@ import java.io.OutputStream;
 
 public class MainActivity extends Activity {
     private static final long MAX_PIXELS = 3000L * 3000L;
-    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_BRUSH = 3, REQ_REF = 4, REQ_TL = 5, REQ_GIF = 6, REQ_AMP4 = 7, REQ_GALLERY = 8, REQ_CAMERA = 9, REQ_EXPORT = 10, REQ_BRUSH_EXPORT = 11, REQ_FONT = 12, REQ_TREE = 13, REQ_PDF_MANY = 14, REQ_PAGES_PDF = 15, REQ_APNG = 16, REQ_LAYERS_TREE = 17, REQ_BACKUP = 18, REQ_RESTORE = 19, REQ_SHAPE = 20, REQ_GRAIN = 21;
+    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_BRUSH = 3, REQ_REF = 4, REQ_TL = 5, REQ_GIF = 6, REQ_AMP4 = 7, REQ_GALLERY = 8, REQ_CAMERA = 9, REQ_EXPORT = 10, REQ_BRUSH_EXPORT = 11, REQ_FONT = 12, REQ_TREE = 13, REQ_PDF_MANY = 14, REQ_PAGES_PDF = 15, REQ_APNG = 16, REQ_LAYERS_TREE = 17, REQ_BACKUP = 18, REQ_RESTORE = 19, REQ_SHAPE = 20, REQ_GRAIN = 21, REQ_SWATCHES_IN = 22, REQ_SWATCHES_OUT = 23;
     private static final String[] FORMATS = {"PNG", "JPEG", "WebP", "PDF", "PSD (layers)"};
     private static final String[] MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf", "image/vnd.adobe.photoshop"};
     private static final String[] EXTS = {"png", "jpg", "webp", "pdf", "psd"};
@@ -777,12 +777,25 @@ public class MainActivity extends Activity {
             new Adj("Curves", new String[0], new float[0], new float[0], new float[0],
                     v -> { float[][] c = curveView.arrays(); int[] l = Fx.curve(c[0], c[1]); return (s, o) -> Fx.lut(s, o, l); }),
             new Adj("Threshold", new String[]{"Level"}, new float[]{1}, new float[]{254}, new float[]{128},
-                    v -> (s, o) -> Fx.lut(s, o, Fx.threshold(Math.round(v[0])))),
+                    v -> (s, o) -> Fx.thresholdLum(s, o, Math.round(v[0]))),
+            new Adj("Hue, Saturation, Brightness", new String[]{"Hue", "Saturation", "Brightness"}, new float[]{-180, -1, -1}, new float[]{180, 1, 1}, new float[]{0, 0, 0},
+                    v -> (s, o) -> Fx.hsb(s, o, v[0], v[1], v[2])),
+            new Adj("Colour Balance", new String[]{"Cyan ↔ Red", "Magenta ↔ Green", "Yellow ↔ Blue"}, new float[]{-1, -1, -1}, new float[]{1, 1, 1}, new float[]{0, 0, 0},
+                    v -> (s, o) -> Fx.colorBalance(s, o, v[0], v[1], v[2])),
+            new Adj("Gradient Map", new String[]{"Amount (dark = your colour, light = paper)"}, new float[]{0}, new float[]{1}, new float[]{1},
+                    v -> { int ca = canvas.color, cb = canvas.paperColor(); float k = v[0];
+                        return (s, o) -> { Fx.gradientMap(s, o, ca, cb); for (int i = 0; i < s.length; i++) o[i] = mixPx(s[i], o[i], k); }; }),
             new Adj("Posterize", new String[]{"Levels", "Threshold"}, new float[]{2, -0.5f}, new float[]{32, 0.5f}, new float[]{4, 0},
                     v -> (s, o) -> Fx.lut(s, o, Fx.posterize(Math.round(v[0]), v[1]))),
             new Adj("Invert", new String[0], new float[0], new float[0], new float[0],
                     v -> (s, o) -> Fx.lut(s, o, Fx.invert())),
         };
+    }
+
+    /** Blend between two pixels by k (0..1). */
+    private static int mixPx(int a, int b, float k) {
+        return Fx.pix(Math.round((a >>> 24) + ((b >>> 24) - (a >>> 24)) * k), Math.round(Fx.red(a) + (Fx.red(b) - Fx.red(a)) * k),
+                Math.round(Fx.green(a) + (Fx.green(b) - Fx.green(a)) * k), Math.round(Fx.blue(a) + (Fx.blue(b) - Fx.blue(a)) * k));
     }
 
     private void adjustMenu(View anchor) {
@@ -794,6 +807,7 @@ public class MainActivity extends Activity {
         Ui.Pop pop = new Ui.Pop(this, 280);
         pop.title("Adjustments");
         String[][] groups = {
+                {"Colour", "Hue, Saturation, Brightness", "Colour Balance", "Gradient Map"},
                 {"Tone", "Brightness / Contrast", "Curves", "Threshold", "Posterize", "Invert"},
                 {"Blur", "Gaussian Blur", "Motion Blur", "Perspective Blur"},
                 {"Effects", "Noise", "Sharpen", "Bloom", "Glitch", "Halftone"},
@@ -1012,7 +1026,7 @@ public class MainActivity extends Activity {
                     float w = getWidth(), r = 15 * dp, cx = w / 2, cy = r + 3 * dp, tip = getHeight() - 2 * dp;
                     p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(2 * dp); p.setColor(Ui.ACCENT);
                     c.drawLine(cx, cy + r, cx, tip, p); // stem down to where it will drop
-                    p.setStyle(Paint.Style.FILL); p.setColor(0xFF000000 | canvas.grey * 0x10101);
+                    p.setStyle(Paint.Style.FILL); p.setColor(0xFF000000 | canvas.color);
                     c.drawCircle(cx, cy, r, p);
                     p.setStyle(Paint.Style.STROKE); p.setColor(0xFF1C1C1E); p.setStrokeWidth(4.5f * dp);
                     c.drawCircle(cx, cy, r + 1 * dp, p); // dark outline: shows on white paper
@@ -1298,7 +1312,7 @@ public class MainActivity extends Activity {
                     String t = et.getText().toString();
                     if (t.trim().isEmpty()) return;
                     CanvasView.TextInfo ti = new CanvasView.TextInfo(t, Math.max(8, sb.getProgress()), bold.isChecked(), align[0], fontIds.get(font[0]),
-                            cur != null ? cur.grey : canvas.grey);
+                            cur != null ? cur.color : canvas.color);
                     ti.spacing = sp.getProgress() / 100f - 0.1f;
                     ti.lineSpacing = 0.6f + ls.getProgress() / 100f;
                     ti.underline = under.isChecked();
@@ -1750,7 +1764,7 @@ public class MainActivity extends Activity {
             default: // Help
                 pop.item("Gesture controls", true, () -> action(8, anchor));
                 pop.item("About Inkwell", true, () -> new AlertDialog.Builder(this).setTitle("Inkwell")
-                        .setMessage("A tiny greyscale drawing app. No libraries, plain Java.").setPositiveButton("OK", null).show());
+                        .setMessage("A small, fast drawing app for Android. No libraries, plain Java.").setPositiveButton("OK", null).show());
         }
         pop.show(anchor);
     }
@@ -2320,101 +2334,25 @@ public class MainActivity extends Activity {
 
 
     private void updateColor() {
-        int g = canvas.grey;
-        colorBtn.grey = g;
+        colorBtn.color = canvas.color;
         colorBtn.invalidate();
     }
 
-    /** Grey picker: slider (black..white) plus quick swatches. */
-    private final java.util.ArrayList<Integer> greyHistory = new java.util.ArrayList<>();
+    private ColorPanel colors;
+    ColorPanel colorPanel() { if (colors == null) colors = new ColorPanel(this, prefs, dp); return colors; }
 
-    /** Colour panel (greyscale): a tone strip, fine slider, palette and history. */
+    /** The Colour panel (Disc, Classic, Harmony, Value, Palettes), like Procreate's. */
     private void pickGrey() {
-        Ui.Pop pop = new Ui.Pop(this, 320);
-        pop.title("Colour");
-        int p = (int) (14 * dp);
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(p, 0, p, p);
-        View preview = new View(this);
-        SeekBar sb = new SeekBar(this);
-        sb.setMax(255);
-        Runnable show = () -> {
-            int g = 255 - sb.getProgress();
-            preview.setBackgroundColor(Color.rgb(g, g, g));
-            canvas.grey = g;
-            updateColor();
-        };
-        View strip = new View(this) { // tap or drag along the tone strip
-            final Paint pt = new Paint();
-            @Override protected void onDraw(Canvas c) {
-                pt.setShader(new android.graphics.LinearGradient(0, 0, getWidth(), 0, Color.BLACK, Color.WHITE, android.graphics.Shader.TileMode.CLAMP));
-                c.drawRect(0, 0, getWidth(), getHeight(), pt);
-                float rr = getHeight() / 2.6f, x = rr + canvas.grey / 255f * (getWidth() - 2 * rr);
-                Paint r = new Paint(Paint.ANTI_ALIAS_FLAG);
-                r.setStyle(Paint.Style.STROKE);
-                r.setStrokeWidth(3 * dp);
-                r.setColor(Ui.ACCENT);
-                c.drawCircle(x, getHeight() / 2f, rr, r);
-            }
-            @Override public boolean onTouchEvent(android.view.MotionEvent e) {
-                int g = Math.max(0, Math.min(255, Math.round(e.getX() / getWidth() * 255)));
-                sb.setProgress(255 - g);
-                invalidate();
-                getParent().requestDisallowInterceptTouchEvent(true);
-                return true;
-            }
-        };
-        box.addView(strip, new LinearLayout.LayoutParams(-1, (int) (56 * dp)));
-        sb.setProgress(255 - canvas.grey);
-        sb.setOnSeekBarChangeListener(new Slider() {
-            public void onProgressChanged(SeekBar s, int v, boolean u) { show.run(); strip.invalidate(); }
-        });
-        box.addView(sb, new LinearLayout.LayoutParams(-1, (int) (44 * dp)));
-        box.addView(preview, new LinearLayout.LayoutParams(-1, (int) (28 * dp)));
-        TextView pl = new TextView(this);
-        pl.setText("PALETTE");
-        pl.setTextColor(0xFF8E8E93);
-        pl.setTextSize(12);
-        pl.setPadding(0, p, 0, 4);
-        box.addView(pl);
-        box.addView(swatches(new int[]{0, 32, 64, 96, 128, 160, 192, 224, 255}, sb));
-        if (!greyHistory.isEmpty()) {
-            TextView hl = new TextView(this);
-            hl.setText("HISTORY");
-            hl.setTextColor(0xFF8E8E93);
-            hl.setTextSize(12);
-            hl.setPadding(0, p, 0, 4);
-            box.addView(hl);
-            int[] h = new int[greyHistory.size()];
-            for (int i = 0; i < h.length; i++) h[i] = greyHistory.get(i);
-            box.addView(swatches(h, sb));
-        }
-        pop.add(box);
-        show.run();
-        pop.win.setOnDismissListener(() -> { // remember recently used greys
-            greyHistory.remove(Integer.valueOf(canvas.grey));
-            greyHistory.add(0, canvas.grey);
-            while (greyHistory.size() > 9) greyHistory.remove(greyHistory.size() - 1);
-        });
-        pop.show(colorBtn);
+        colorPanel().show(colorBtn, canvas.color, c -> { canvas.color = c; updateColor(); });
     }
 
-    private LinearLayout swatches(int[] greys, SeekBar sb) {
-        LinearLayout sw = new LinearLayout(this);
-        for (int g : greys) {
-            View v = new View(this);
-            android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
-            d.setColor(Color.rgb(g, g, g));
-            d.setCornerRadius(6 * dp);
-            d.setStroke(1, 0xFF636366);
-            v.setBackground(d);
-            v.setOnClickListener(x -> sb.setProgress(255 - g));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (28 * dp), (int) (28 * dp));
-            lp.setMargins(2, 2, (int) (4 * dp), 2);
-            sw.addView(v, lp);
-        }
-        return sw;
+    void importSwatches() { startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQ_SWATCHES_IN); }
+
+    private ColorPanel.Palette exportPalette;
+    void exportSwatches(ColorPanel.Palette p) {
+        exportPalette = p;
+        startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream")
+                .putExtra(Intent.EXTRA_TITLE, p.name.replaceAll("[/\\\\:*?\"<>|]", "_") + ".swatches"), REQ_SWATCHES_OUT);
     }
 
     private void confirm(String msg, Runnable yes) {
@@ -2428,7 +2366,7 @@ public class MainActivity extends Activity {
     private TextView hudView;
 
     /** Small banner at the top of the canvas, like Procreate's notices. */
-    private void hud(String msg) {
+    void hud(String msg) {
         if (stage == null) { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show(); return; }
         if (hudView == null) {
             hudView = new TextView(this);
@@ -2530,7 +2468,7 @@ public class MainActivity extends Activity {
             case 12: canvas.fillLayer(); break;
             case 13: canvas.toggleVisible(canvas.current); break;
             case 14: canvas.animateFit(); break;
-            case 15: canvas.pickNext = true; pickBtn.setOn(true); hud("Tap the canvas to pick a grey"); break;
+            case 15: canvas.pickNext = true; pickBtn.setOn(true); hud("Tap the canvas to pick a colour"); break;
             case 16: if (canvas.onToggleUi != null) canvas.onToggleUi.run(); break;
             case 17: toggleReference(); break;
         }
@@ -2899,7 +2837,7 @@ public class MainActivity extends Activity {
         r.setPadding(0, (int) (6 * dp), 0, (int) (6 * dp));
         View sw = new View(this);
         android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
-        d.setColor(Color.rgb(canvas.bgGrey, canvas.bgGrey, canvas.bgGrey));
+        d.setColor(0xFF000000 | canvas.bgColor);
         d.setStroke((int) (2 * dp), 0xFF636366);
         sw.setBackground(d);
         sw.setAlpha(canvas.bgVisible ? 1f : 0.35f);
@@ -2914,50 +2852,22 @@ public class MainActivity extends Activity {
         vis.setTextSize(16);
         vis.setTextColor(canvas.bgVisible ? Color.WHITE : 0xFF888888);
         vis.setPadding((int) (8 * dp), (int) (8 * dp), (int) (8 * dp), (int) (8 * dp));
-        vis.setOnClickListener(v -> canvas.setBackground(canvas.bgGrey, !canvas.bgVisible));
+        vis.setOnClickListener(v -> canvas.setBackground(canvas.bgColor, !canvas.bgVisible));
         r.addView(vis);
         r.setOnClickListener(this::pickBackground);
         layerList.addView(r);
     }
 
-    /** Grey picker for the background colour. */
+    /** Background colour: the same colour panel, changing the paper live; one undo step when it closes. */
     private void pickBackground(View anchor) {
-        int before = canvas.bgGrey;
-        Ui.Pop pop = new Ui.Pop(this, 300);
-        pop.title("Background colour");
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        int p = (int) (14 * dp);
-        box.setPadding(p, 0, p, p);
-        SeekBar sb = new SeekBar(this);
-        sb.setMax(255);
-        sb.setProgress(canvas.bgGrey);
-        sb.setOnSeekBarChangeListener(new Slider() {
-            public void onProgressChanged(SeekBar s2, int v, boolean u) { canvas.bgGrey = v; canvas.bgVisible = true; canvas.invalidate(); }
-        });
-        box.addView(sb, new LinearLayout.LayoutParams(-1, (int) (44 * dp)));
-        LinearLayout sw = new LinearLayout(this);
-        for (int g : new int[]{0, 32, 64, 96, 128, 160, 192, 224, 255}) {
-            View v = new View(this);
-            android.graphics.drawable.GradientDrawable dr = new android.graphics.drawable.GradientDrawable();
-            dr.setColor(Color.rgb(g, g, g));
-            dr.setCornerRadius(6 * dp);
-            dr.setStroke(1, 0xFF636366);
-            v.setBackground(dr);
-            v.setOnClickListener(x -> sb.setProgress(g));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (26 * dp), (int) (26 * dp));
-            lp.setMargins(2, 2, (int) (4 * dp), 2);
-            sw.addView(v, lp);
-        }
-        box.addView(sw);
-        pop.add(box);
-        pop.win.setOnDismissListener(() -> { // one undo step for the whole change
-            int after = canvas.bgGrey;
-            canvas.bgGrey = before;
+        int before = canvas.bgColor;
+        colorPanel().show(anchor, canvas.bgColor, c -> { canvas.bgColor = c; canvas.bgVisible = true; canvas.invalidate(); });
+        colorPanel().pop.win.setOnDismissListener(() -> {
+            int after = canvas.bgColor;
+            canvas.bgColor = before;
             canvas.setBackground(after, true);
             refreshPanel();
         });
-        pop.show(anchor);
     }
 
     private void groupHeader(int g) {
@@ -3072,13 +2982,13 @@ public class MainActivity extends Activity {
                     }
                 }
             };
-            refContent.setOnTouchListener((v, e) -> { // tap the reference image to pick its grey
+            refContent.setOnTouchListener((v, e) -> { // tap the reference image to pick its colour
                 if (refMode != 1 || refImage == null || e.getActionMasked() != android.view.MotionEvent.ACTION_UP) return true;
                 float s = Math.min((float) v.getWidth() / refImage.getWidth(), (float) v.getHeight() / refImage.getHeight());
                 int px = (int) ((e.getX() - (v.getWidth() - refImage.getWidth() * s) / 2) / s);
                 int py = (int) ((e.getY() - (v.getHeight() - refImage.getHeight() * s) / 2) / s);
                 if (px >= 0 && py >= 0 && px < refImage.getWidth() && py < refImage.getHeight()) {
-                    canvas.grey = Video.grey(refImage.getPixel(px, py));
+                    canvas.color = 0xFF000000 | refImage.getPixel(px, py);
                     updateColor();
                 }
                 return true;
@@ -3728,15 +3638,11 @@ public class MainActivity extends Activity {
                 if (s < 1) dec.setTargetSize((int) (w * s), (int) (h * s));
             });
         }
-        // Convert to grey
+        // In colour, as an editable layer
         Psd.Doc d = new Psd.Doc();
         d.w = img.getWidth(); d.h = img.getHeight();
         Bitmap g = Bitmap.createBitmap(d.w, d.h, Bitmap.Config.ARGB_8888);
-        ColorMatrix cm = new ColorMatrix();
-        cm.setSaturation(0);
-        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
-        p.setColorFilter(new ColorMatrixColorFilter(cm));
-        new Canvas(g).drawBitmap(img, 0, 0, p);
+        new Canvas(g).drawBitmap(img, 0, 0, new Paint(Paint.FILTER_BITMAP_FLAG));
         img.recycle();
         d.layers.add(new CanvasView.Layer(g, name));
         return d;
@@ -3836,6 +3742,18 @@ public class MainActivity extends Activity {
         if (res != RESULT_OK || data == null || data.getData() == null) return;
         if (req == REQ_EXPORT) export(data.getData(), exportFormat);
         if (req == REQ_FONT) importFont(data.getData());
+        if (req == REQ_SWATCHES_IN) {
+            try (InputStream in = getContentResolver().openInputStream(data.getData())) {
+                java.util.List<ColorPanel.Palette> ps = ColorPanel.readSwatches(Brushes.readAll(in));
+                colorPanel().added(ps);
+                toast(ps.size() == 1 ? "Palette added: " + ps.get(0).name : ps.size() + " palettes added");
+            } catch (Exception e) { toast("Not a .swatches palette file"); }
+        }
+        if (req == REQ_SWATCHES_OUT && exportPalette != null) {
+            try (OutputStream o = getContentResolver().openOutputStream(data.getData(), "wt")) { ColorPanel.writeSwatches(exportPalette, o); toast("Palette exported"); }
+            catch (Exception e) { toast("Could not export: " + e.getMessage()); }
+            exportPalette = null;
+        }
         if ((req == REQ_SHAPE || req == REQ_GRAIN) && studioBrush != null) {
             try (InputStream in = getContentResolver().openInputStream(data.getData())) {
                 byte[] img = Brushes.readAll(in);
@@ -3922,7 +3840,7 @@ public class MainActivity extends Activity {
         for (int i = 0; i < canvas.layers.size(); i++) {
             CanvasView.TextInfo t = canvas.layers.get(i).text;
             if (t != null) sb.append(i).append('|').append(esc(t.text)).append('|').append(t.size).append('|').append(t.bold)
-                    .append('|').append(t.align).append('|').append(t.font).append('|').append(t.grey)
+                    .append('|').append(t.align).append('|').append(t.font).append('|').append(t.color)
                     .append('|').append(t.spacing).append('|').append(t.lineSpacing).append('|').append(t.underline).append('|').append(t.outline).append('\n');
         }
         writeText(textFile(curId), sb.toString());
@@ -3953,7 +3871,7 @@ public class MainActivity extends Activity {
                 int i = Integer.parseInt(f[0]);
                 if (i < canvas.layers.size()) {
                     CanvasView.TextInfo ti = new CanvasView.TextInfo(unesc(f[1]), Float.parseFloat(f[2]), Boolean.parseBoolean(f[3]),
-                            Integer.parseInt(f[4]), f[5], Integer.parseInt(f[6]));
+                            Integer.parseInt(f[4]), f[5], colourOf(Integer.parseInt(f[6])));
                     if (f.length >= 11) {
                         ti.spacing = Float.parseFloat(f[7]); ti.lineSpacing = Float.parseFloat(f[8]);
                         ti.underline = Boolean.parseBoolean(f[9]); ti.outline = Boolean.parseBoolean(f[10]);
@@ -3979,9 +3897,12 @@ public class MainActivity extends Activity {
 
     private String readText(File f) throws Exception { return new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8"); }
 
+    /** Saved colours: drawings from before colour stored a grey 0..255; newer ones store the colour itself. */
+    static int colourOf(int v) { return v >= 0 && v <= 255 ? 0xFF000000 | v * 0x10101 : 0xFF000000 | v; }
+
     private void saveBackground() {
         saveExtras();
-        try (FileOutputStream o = new FileOutputStream(bgFile(curId))) { o.write((canvas.bgGrey + "," + canvas.bgVisible).getBytes("UTF-8")); }
+        try (FileOutputStream o = new FileOutputStream(bgFile(curId))) { o.write((canvas.bgColor + "," + canvas.bgVisible).getBytes("UTF-8")); }
         catch (Exception ignored) { }
         try (FileOutputStream o = new FileOutputStream(guideFile(curId))) { o.write(canvas.guideState().getBytes("UTF-8")); }
         catch (Exception ignored) { }
@@ -3989,10 +3910,10 @@ public class MainActivity extends Activity {
 
     /** Restores the drawing's background colour (white if none saved). */
     private void loadBackground() {
-        canvas.bgGrey = 255; canvas.bgVisible = true;
+        canvas.bgColor = Color.WHITE; canvas.bgVisible = true;
         try {
             String[] v = new String(java.nio.file.Files.readAllBytes(bgFile(curId).toPath()), "UTF-8").trim().split(",");
-            canvas.bgGrey = Integer.parseInt(v[0]);
+            canvas.bgColor = colourOf(Integer.parseInt(v[0]));
             canvas.bgVisible = Boolean.parseBoolean(v[1]);
         } catch (Exception ignored) { }
         loadExtras();

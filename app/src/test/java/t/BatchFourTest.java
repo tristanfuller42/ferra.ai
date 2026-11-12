@@ -84,7 +84,7 @@ public class BatchFourTest extends Base {
         call(act, "setTool", CanvasView.SELECT);
         cv.selKind = 2; // rectangle
         cv.selFill = true;
-        cv.grey = 80;
+        cv.color = gc(80);
         stroke(new float[][]{{W * .3f, H * .3f}, {W * .5f, H * .45f}, {W * .6f, H * .6f}}, MotionEvent.TOOL_TYPE_FINGER, 1);
         assertNotNull("selected", cv.sel);
         int[] in = toDoc(W * .45f, H * .45f), out = toDoc(W * .2f, H * .2f);
@@ -224,7 +224,7 @@ public class BatchFourTest extends Base {
         assertTrue(cv.addTextLayer(t));
         cv.toggleLock(cv.current);
         cv.layers.get(0).hold = 3;
-        cv.setBackground(200, true);
+        cv.setBackground(gc(200), true);
         cv.guide = 4; cv.symRotate = true;
         call(act, "togglePages");
         int layers = cv.layers.size();
@@ -247,7 +247,7 @@ public class BatchFourTest extends Base {
         assertEquals(4, cv.guide);
         assertTrue(cv.symRotate);
         assertTrue("page assist kept", cv.pages);
-        assertEquals(200, (int) (Integer) get(cv, "bgGrey"));
+        assertEquals(gc(200), (int) (Integer) get(cv, "bgColor"));
     }
 
     @Test public void share_opens_the_share_sheet_with_the_file() throws Exception {
@@ -436,7 +436,7 @@ public class BatchFourTest extends Base {
     @Test public void halftone_brush_one_grid_no_double_up() {
         cv.brush = brushNamed("Halftone grid");
         cv.size = 120;
-        cv.grey = 0;
+        cv.color = gc(0);
         pen(new float[][]{{W * .3f, H * .5f}, {W * .5f, H * .5f}});
         Bitmap one = L().copy(Bitmap.Config.ARGB_8888, false);
         // a second pass over the same place, and overlapping it: no change where they overlap

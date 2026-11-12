@@ -45,6 +45,9 @@ public abstract class Base {
         settle();
     }
 
+    /** An opaque grey colour. */
+    static int gc(int g) { return 0xFF000000 | g * 0x10101; }
+
     static Object get(Object o, String f) {
         try {
             Class<?> c = o.getClass();

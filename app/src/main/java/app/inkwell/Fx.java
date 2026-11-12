@@ -1,21 +1,34 @@
 package app.inkwell;
 
 /**
- * Pixel effects on greyscale ARGB arrays (unpremultiplied, R=G=B).
+ * Pixel effects on ARGB arrays (unpremultiplied colour).
  * Pure Java so they can run on a background thread and be tested off-device.
  */
 final class Fx {
     private Fx() { }
 
-    static int grey(int px) { return px & 255; }
     static int alpha(int px) { return px >>> 24; }
+    static int red(int px) { return (px >> 16) & 255; }
+    static int green(int px) { return (px >> 8) & 255; }
+    static int blue(int px) { return px & 255; }
+    /** Perceived brightness 0..255. */
+    static int lum(int px) { return (red(px) * 299 + green(px) * 587 + blue(px) * 114) / 1000; }
     static int pix(int a, int g) { return (a << 24) | (g * 0x010101); }
+    static int pix(int a, int r, int g, int b) { return (a << 24) | (clamp(r) << 16) | (clamp(g) << 8) | clamp(b); }
     static int clamp(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
 
-    // ---------------- Tone (lookup table) ----------------
+    // ---------------- Tone (lookup table, applied to red, green and blue) ----------------
 
     static void lut(int[] s, int[] d, int[] lut) {
-        for (int i = 0; i < s.length; i++) d[i] = (s[i] & 0xFF000000) | (lut[s[i] & 255] * 0x010101);
+        for (int i = 0; i < s.length; i++) {
+            int p = s[i];
+            d[i] = (p & 0xFF000000) | (lut[(p >> 16) & 255] << 16) | (lut[(p >> 8) & 255] << 8) | lut[p & 255];
+        }
+    }
+
+    /** Threshold on brightness: black or white. */
+    static void thresholdLum(int[] s, int[] d, int level) {
+        for (int i = 0; i < s.length; i++) d[i] = (s[i] & 0xFF000000) | (lum(s[i]) >= level ? 0xFFFFFF : 0);
     }
 
     static int[] brightnessContrast(float bright, float contrast) {
@@ -31,7 +44,7 @@ final class Fx {
 
     static int[] posterize(int levels) { return posterize(levels, 0); }
 
-    /** Posterize with a threshold shift (-0.5..0.5): moves where each step to the next grey happens (darker or lighter). */
+    /** Posterize with a threshold shift (-0.5..0.5): moves where each step to the next level happens (darker or lighter). */
     static int[] posterize(int levels, float shift) {
         int[] l = new int[256];
         int n = Math.max(2, levels) - 1;
@@ -68,22 +81,58 @@ final class Fx {
         return l;
     }
 
-    // ---------------- Blurs ----------------
+    // ---------------- Colour ----------------
 
-    /** Splits into premultiplied grey and alpha planes. */
-    private static void split(int[] s, int[] g, int[] a) {
-        for (int i = 0; i < s.length; i++) { int al = s[i] >>> 24; a[i] = al; g[i] = (s[i] & 255) * al; }
-    }
-
-    private static void join(int[] g, int[] a, int[] d, int scale) {
-        for (int i = 0; i < d.length; i++) {
-            int al = clamp(a[i] / scale);
-            int gr = al == 0 ? 0 : clamp(g[i] / scale / al);
-            d[i] = pix(al, gr);
+    /** Hue shift (-180..180°), saturation and brightness (-1..1), like Procreate's Hue, Saturation, Brightness. */
+    static void hsb(int[] s, int[] d, float hueDeg, float sat, float bright) {
+        float[] hsv = new float[3];
+        for (int i = 0; i < s.length; i++) {
+            int p = s[i];
+            android.graphics.Color.RGBToHSV(red(p), green(p), blue(p), hsv);
+            hsv[0] = ((hsv[0] + hueDeg) % 360 + 360) % 360;
+            hsv[1] = Math.max(0, Math.min(1, sat >= 0 ? hsv[1] + (1 - hsv[1]) * sat * hsv[1] * 2 : hsv[1] * (1 + sat)));
+            hsv[2] = Math.max(0, Math.min(1, bright >= 0 ? hsv[2] + (1 - hsv[2]) * bright : hsv[2] * (1 + bright)));
+            d[i] = (p & 0xFF000000) | (android.graphics.Color.HSVToColor(hsv) & 0xFFFFFF);
         }
     }
 
-    /** One box pass along rows (dx=1) or columns (dx=w), edge-clamped. Values are scaled by (2r+1). */
+    /** Colour balance: cyan↔red, magenta↔green, yellow↔blue (-1..1), strongest in the mid-tones. */
+    static void colorBalance(int[] s, int[] d, float cr, float mg, float yb) {
+        for (int i = 0; i < s.length; i++) {
+            int p = s[i];
+            float l = lum(p) / 255f, mid = 1 - Math.abs(l - 0.5f) * 1.4f; // most effect in the mid-tones
+            float k = 90 * Math.max(0.2f, mid);
+            d[i] = pix(p >>> 24, Math.round(red(p) + cr * k), Math.round(green(p) + mg * k), Math.round(blue(p) + yb * k));
+        }
+    }
+
+    /** Gradient map: dark→light mapped from colour a to colour b. */
+    static void gradientMap(int[] s, int[] d, int ca, int cb) {
+        for (int i = 0; i < s.length; i++) {
+            int p = s[i], l = lum(p);
+            d[i] = pix(p >>> 24, red(ca) + (red(cb) - red(ca)) * l / 255, green(ca) + (green(cb) - green(ca)) * l / 255,
+                    blue(ca) + (blue(cb) - blue(ca)) * l / 255);
+        }
+    }
+
+    // ---------------- Blurs ----------------
+
+    /** Splits into premultiplied colour planes and alpha. */
+    private static void split(int[] s, int[] r, int[] g, int[] b, int[] a) {
+        for (int i = 0; i < s.length; i++) {
+            int p = s[i], al = p >>> 24;
+            a[i] = al; r[i] = red(p) * al; g[i] = green(p) * al; b[i] = blue(p) * al;
+        }
+    }
+
+    private static void join(int[] r, int[] g, int[] b, int[] a, int[] d) {
+        for (int i = 0; i < d.length; i++) {
+            int al = clamp(a[i]);
+            d[i] = al == 0 ? 0 : pix(al, r[i] / al, g[i] / al, b[i] / al);
+        }
+    }
+
+    /** One box pass along rows (dx=1) or columns (dx=w), edge-clamped. */
     private static void box(int[] s, int[] d, int w, int h, int r, boolean rows) {
         int len = rows ? w : h, lines = rows ? h : w;
         int step = rows ? 1 : w;
@@ -100,17 +149,24 @@ final class Fx {
         }
     }
 
+    private static void blur3(int[] plane, int[] t, int w, int h, int r) {
+        for (int pass = 0; pass < 3; pass++) { box(plane, t, w, h, r, true); box(t, plane, w, h, r, false); }
+    }
+
     /** Gaussian-like blur (3 box passes each way). radius ~ sigma in pixels. */
     static void gaussian(int[] s, int[] d, int w, int h, float radius) {
         int r = Math.max(1, Math.round(radius));
         int n = w * h;
-        int[] g = new int[n], a = new int[n], t = new int[n];
-        split(s, g, a);
-        for (int pass = 0; pass < 3; pass++) {
-            box(g, t, w, h, r, true); box(t, g, w, h, r, false);
-            box(a, t, w, h, r, true); box(t, a, w, h, r, false);
-        }
-        join(g, a, d, 1);
+        int[] pr = new int[n], pg = new int[n], pb = new int[n], a = new int[n], t = new int[n];
+        split(s, pr, pg, pb, a);
+        blur3(pr, t, w, h, r); blur3(pg, t, w, h, r); blur3(pb, t, w, h, r); blur3(a, t, w, h, r);
+        join(pr, pg, pb, a, d);
+    }
+
+    /** Average of samples (premultiplied), used by motion and zoom blur. */
+    private static int average(long sr, long sg, long sb, long sa, int n) {
+        if (sa == 0) return 0;
+        return pix((int) (sa / n), (int) (sr / sa), (int) (sg / sa), (int) (sb / sa));
     }
 
     static void motion(int[] s, int[] d, int w, int h, float length, float angleDeg) {
@@ -124,14 +180,13 @@ final class Fx {
         }
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
-                long sg = 0, sa = 0;
+                long sr = 0, sg = 0, sb = 0, sa = 0;
                 for (int k = 0; k < n; k++) {
                     int xx = Math.max(0, Math.min(w - 1, x + ox[k])), yy = Math.max(0, Math.min(h - 1, y + oy[k]));
                     int p = s[yy * w + xx], al = p >>> 24;
-                    sa += al; sg += (p & 255) * al;
+                    sa += al; sr += red(p) * al; sg += green(p) * al; sb += blue(p) * al;
                 }
-                int al = (int) (sa / n);
-                d[y * w + x] = pix(al, sa == 0 ? 0 : clamp((int) (sg / sa)));
+                d[y * w + x] = average(sr, sg, sb, sa, n);
             }
     }
 
@@ -140,23 +195,25 @@ final class Fx {
         int n = 16;
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
-                long sg = 0, sa = 0;
+                long sr = 0, sg = 0, sb = 0, sa = 0;
                 for (int k = 0; k < n; k++) {
                     float f = 1 - amount * 0.35f * k / (n - 1);
                     int xx = Math.max(0, Math.min(w - 1, Math.round(cx + (x - cx) * f)));
                     int yy = Math.max(0, Math.min(h - 1, Math.round(cy + (y - cy) * f)));
                     int p = s[yy * w + xx], al = p >>> 24;
-                    sa += al; sg += (p & 255) * al;
+                    sa += al; sr += red(p) * al; sg += green(p) * al; sb += blue(p) * al;
                 }
-                d[y * w + x] = pix((int) (sa / n), sa == 0 ? 0 : clamp((int) (sg / sa)));
+                d[y * w + x] = average(sr, sg, sb, sa, n);
             }
     }
 
     static void sharpen(int[] s, int[] d, int w, int h, float amount) {
         gaussian(s, d, w, h, 1.5f);
+        float k = amount * 2;
         for (int i = 0; i < s.length; i++) {
-            int g = s[i] & 255, b = d[i] & 255;
-            d[i] = (s[i] & 0xFF000000) | (clamp(Math.round(g + amount * 2 * (g - b))) * 0x010101);
+            int p = s[i], q = d[i];
+            d[i] = pix(p >>> 24, Math.round(red(p) + k * (red(p) - red(q))), Math.round(green(p) + k * (green(p) - green(q))),
+                    Math.round(blue(p) + k * (blue(p) - blue(q))));
         }
     }
 
@@ -164,16 +221,18 @@ final class Fx {
     static void bloom(int[] s, int[] d, int w, int h, float amount, float radius) {
         int[] bright = new int[s.length];
         for (int i = 0; i < s.length; i++) {
-            int g = s[i] & 255, a = s[i] >>> 24;
-            int v = clamp((g - 110) * 255 / 145);
-            bright[i] = pix(a * v / 255, 255);
+            int p = s[i], a = p >>> 24;
+            int v = clamp((lum(p) - 110) * 255 / 145);
+            bright[i] = (clamp(a * v / 255) << 24) | (p & 0xFFFFFF); // the glow keeps the colour of what glows
         }
         gaussian(bright, bright, w, h, radius);
         for (int i = 0; i < s.length; i++) {
-            int g = s[i] & 255, a = s[i] >>> 24;
-            int glow = Math.round((bright[i] >>> 24) * amount * 2.2f);
-            int ng = 255 - (255 - g) * (255 - clamp(glow)) / 255;
-            d[i] = pix(Math.max(a, clamp(glow)), ng);
+            int p = s[i], a = p >>> 24, gl = bright[i];
+            int glow = clamp(Math.round((gl >>> 24) * amount * 2.2f));
+            int r = 255 - (255 - red(p)) * (255 - glow * red(gl) / 255) / 255;
+            int g = 255 - (255 - green(p)) * (255 - glow * green(gl) / 255) / 255;
+            int b = 255 - (255 - blue(p)) * (255 - glow * blue(gl) / 255) / 255;
+            d[i] = pix(Math.max(a, glow), r, g, b);
         }
     }
 
@@ -186,8 +245,8 @@ final class Fx {
 
     static void noise(int[] s, int[] d, float amount, int seed) {
         for (int i = 0; i < s.length; i++) {
-            int r = (hash(i * 31 + seed) & 255) - 128;
-            d[i] = (s[i] & 0xFF000000) | (clamp((s[i] & 255) + Math.round(r * amount * 0.9f)) * 0x010101);
+            int n = Math.round(((hash(i * 31 + seed) & 255) - 128) * amount * 0.9f), p = s[i];
+            d[i] = pix(p >>> 24, red(p) + n, green(p) + n, blue(p) + n);
         }
     }
 
@@ -214,7 +273,7 @@ final class Fx {
         }
     }
 
-    /** Classic 45° halftone dots. cell = dot spacing in pixels. Dot area matches the tone. */
+    /** Classic 45° halftone dots in the colours of the picture. cell = dot spacing in pixels. Dot area matches the tone. */
     static void halftone(int[] s, int[] d, int w, int h, float cell) {
         final float k = 0.70710678f;
         for (int y = 0; y < h; y++)
@@ -222,20 +281,22 @@ final class Fx {
                 float u = (x + y) * k, v = (x - y) * k;
                 int iu0 = (int) Math.floor(u / cell), iv0 = (int) Math.floor(v / cell);
                 float cov = 0;
+                int col = 0;
                 for (int du = -1; du <= 1; du++)       // neighbouring dots can reach into this cell
                     for (int dv = -1; dv <= 1; dv++) {
                         float cu = (iu0 + du + 0.5f) * cell, cv = (iv0 + dv + 0.5f) * cell;
                         int sx = Math.round((cu + cv) * k), sy = Math.round((cu - cv) * k);
                         if (sx < 0 || sy < 0 || sx >= w || sy >= h) continue;
                         int p = s[sy * w + sx];
-                        float dark = (255 - (p & 255)) * (p >>> 24) / 65025f;
+                        float dark = (255 - lum(p)) * (p >>> 24) / 65025f;
                         if (dark <= 0) continue;
                         float rad = cell * 0.5642f * (float) Math.sqrt(dark) * 1.08f;
                         float c = rad - (float) Math.hypot(u - cu, v - cv) + 0.5f;
-                        if (c > cov) cov = Math.min(1, c);
+                        if (c > cov) { cov = Math.min(1, c); col = lum(p) < 40 ? 0 : p; } // dark dots are black
                     }
                 int a0 = s[y * w + x] >>> 24;
-                d[y * w + x] = pix(Math.max(a0, Math.round(cov * 255)), Math.round(255 * (1 - cov)));
+                int r = 255 + Math.round((red(col) - 255) * cov), g = 255 + Math.round((green(col) - 255) * cov), b = 255 + Math.round((blue(col) - 255) * cov);
+                d[y * w + x] = pix(Math.max(a0, Math.round(cov * 255)), r, g, b);
             }
     }
 
@@ -248,18 +309,24 @@ final class Fx {
             int m = sel[i] & 255;
             if (m == 255) continue;
             if (m == 0) { out[i] = src[i]; continue; }
-            int a0 = src[i] >>> 24, g0 = src[i] & 255, a1 = out[i] >>> 24, g1 = out[i] & 255;
-            out[i] = pix(a0 + (a1 - a0) * m / 255, g0 + (g1 - g0) * m / 255);
+            int a = src[i], b = out[i];
+            out[i] = pix((a >>> 24) + ((b >>> 24) - (a >>> 24)) * m / 255, red(a) + (red(b) - red(a)) * m / 255,
+                    green(a) + (green(b) - green(a)) * m / 255, blue(a) + (blue(b) - blue(a)) * m / 255);
         }
+    }
+
+    /** Colour as seen over white paper, packed RGB. */
+    private static int onWhite(int p) {
+        int a = p >>> 24;
+        return ((red(p) * a / 255 + 255 - a) << 16) | ((green(p) * a / 255 + 255 - a) << 8) | (blue(p) * a / 255 + 255 - a);
     }
 
     /**
      * Flood fill from (sx,sy) over pixels similar to the seed. Writes 255 into out where filled.
-     * Similarity compares alpha and premultiplied grey; thr is 0..255.
+     * Similarity compares alpha and the colour as seen on white; thr is 0..255.
      */
     static int flood(int[] px, int w, int h, int sx, int sy, int thr, byte[] out) {
         int seed = px[sy * w + sx];
-        int a0 = seed >>> 24, ga0 = (seed & 255) * a0 / 255 + (255 - a0);
         int[] stack = new int[Math.max(64, w * 4)];
         int sp = 0, count = 0;
         stack[sp++] = sy * w + sx;
@@ -267,19 +334,19 @@ final class Fx {
             int i = stack[--sp];
             int y = i / w, x = i % w;
             int lx = x;
-            while (lx >= 0 && out[y * w + lx] == 0 && similar(px[y * w + lx], a0, ga0, thr)) lx--;
+            while (lx >= 0 && out[y * w + lx] == 0 && diff(px[y * w + lx], seed) <= thr) lx--;
             lx++;
             boolean up = false, down = false;
-            for (int xx = lx; xx < w && out[y * w + xx] == 0 && similar(px[y * w + xx], a0, ga0, thr); xx++) {
+            for (int xx = lx; xx < w && out[y * w + xx] == 0 && diff(px[y * w + xx], seed) <= thr; xx++) {
                 out[y * w + xx] = (byte) 255;
                 count++;
                 if (y > 0) {
-                    boolean ok = out[(y - 1) * w + xx] == 0 && similar(px[(y - 1) * w + xx], a0, ga0, thr);
+                    boolean ok = out[(y - 1) * w + xx] == 0 && diff(px[(y - 1) * w + xx], seed) <= thr;
                     if (ok && !up) { if (sp == stack.length) stack = java.util.Arrays.copyOf(stack, sp * 2); stack[sp++] = (y - 1) * w + xx; }
                     up = ok;
                 }
                 if (y < h - 1) {
-                    boolean ok = out[(y + 1) * w + xx] == 0 && similar(px[(y + 1) * w + xx], a0, ga0, thr);
+                    boolean ok = out[(y + 1) * w + xx] == 0 && diff(px[(y + 1) * w + xx], seed) <= thr;
                     if (ok && !down) { if (sp == stack.length) stack = java.util.Arrays.copyOf(stack, sp * 2); stack[sp++] = (y + 1) * w + xx; }
                     down = ok;
                 }
@@ -288,16 +355,11 @@ final class Fx {
         return count;
     }
 
-    private static boolean similar(int p, int a0, int ga0, int thr) {
-        int a = p >>> 24;
-        int ga = (p & 255) * a / 255 + (255 - a); // grey as seen on white paper
-        return Math.abs(a - a0) <= thr * 2 && Math.abs(ga - ga0) <= thr;
-    }
-
-    /** How different a pixel is from the seed (0..255), the same measure flood() compares with its threshold. */
-    static int diff(int p, int a0, int ga0) {
-        int a = p >>> 24, ga = (p & 255) * a / 255 + (255 - a);
-        return Math.max(Math.abs(a - a0) / 2, Math.abs(ga - ga0));
+    /** How different a pixel is from the seed (0..255): the biggest colour or alpha difference. */
+    static int diff(int p, int seed) {
+        int a = onWhite(p), b = onWhite(seed);
+        int dc = Math.max(Math.abs(red(a) - red(b)), Math.max(Math.abs(green(a) - green(b)), Math.abs(blue(a) - blue(b))));
+        return Math.max(Math.abs((p >>> 24) - (seed >>> 24)) / 2, dc);
     }
 
     /**
@@ -305,7 +367,6 @@ final class Fx {
      * threshold, so every threshold step changes the edge a little instead of nothing-then-everything.
      */
     static void softGrow(int[] px, byte[] m, int w, int h, int seed, int thr, int rings) {
-        int a0 = seed >>> 24, ga0 = (seed & 255) * a0 / 255 + (255 - a0);
         for (int r = 0; r < rings; r++) {
             byte[] c = m.clone();
             for (int y = 0; y < h; y++)
@@ -315,13 +376,12 @@ final class Fx {
                     int nb = Math.max(Math.max(x > 0 ? c[i - 1] & 255 : 0, x < w - 1 ? c[i + 1] & 255 : 0),
                             Math.max(y > 0 ? c[i - w] & 255 : 0, y < h - 1 ? c[i + w] & 255 : 0));
                     if (nb == 0) continue;
-                    int cov = (thr + 96 - diff(px[i], a0, ga0)) * 255 / 96; // fades out over 96 grey levels past the threshold
+                    int cov = (thr + 96 - diff(px[i], seed)) * 255 / 96; // fades out over 96 levels past the threshold
                     cov = Math.min(nb, Math.max(0, Math.min(255, cov)));
                     if (cov > 0) m[i] = (byte) cov;
                 }
         }
     }
-
 
     /** Softens a mask edge. */
     static void feather(byte[] m, int w, int h, float radius) {

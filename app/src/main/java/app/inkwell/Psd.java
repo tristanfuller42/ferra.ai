@@ -17,7 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Minimal Photoshop (.psd) reader/writer: 8-bit RGB or greyscale, layers, RLE. Colours become grey. */
+/** Minimal Photoshop (.psd) reader/writer: 8-bit RGB or greyscale, layers, masks, groups, RLE. */
 final class Psd {
     /** PSD blend keys in CanvasView.BLEND_NAMES order. */
     static final String[] KEYS = {"norm", "mul ", "scrn", "over", "dark", "lite", "idiv", "div ", "hLit", "sLit", "diff", "lddg"};
@@ -283,7 +283,7 @@ final class Psd {
         }
     }
 
-    /** Builds a grey ARGB bitmap from colour channels (+ optional alpha). */
+    /** Builds an ARGB bitmap from colour channels (or one grey channel) + optional alpha. */
     private static Bitmap compose(byte[][] ch, int w, int h, int mode) {
         Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         int[] row = new int[w];
@@ -291,10 +291,9 @@ final class Psd {
         for (int y = 0; y < h; y++) {
             int o = y * w;
             for (int x = 0; x < w; x++, o++) {
-                int g = rgb ? ((ch[0][o] & 255) * 299 + (ch[1][o] & 255) * 587 + (ch[2][o] & 255) * 114) / 1000
-                            : ch[0][o] & 255;
                 int a = ch[3] != null ? ch[3][o] & 255 : 255;
-                row[x] = (a << 24) | (g << 16) | (g << 8) | g;
+                if (rgb) row[x] = (a << 24) | ((ch[0][o] & 255) << 16) | ((ch[1][o] & 255) << 8) | (ch[2][o] & 255);
+                else { int g = ch[0][o] & 255; row[x] = (a << 24) | (g << 16) | (g << 8) | g; }
             }
             b.setPixels(row, 0, w, 0, y, w, 1);
         }
@@ -336,12 +335,14 @@ final class Psd {
             boolean closes = g != 0 && (i == layers.size() - 1 || layers.get(i + 1).group != g);
             if (opens) { marker(r, data, "</Layer group>", 255, true, 3); records++; }
             byte[] alpha = channel(l.bmp, 24, true);
-            byte[] grey = channel(l.bmp, 0, true);
+            byte[] red = channel(l.bmp, 16, true), green = channel(l.bmp, 8, true), blue = channel(l.bmp, 0, true);
             byte[] mask = l.mask != null ? channel(l.mask.bmp, 0, true) : null;
             r.writeInt(0); r.writeInt(0); r.writeInt(h); r.writeInt(w);
             r.writeShort(mask != null ? 5 : 4);
             r.writeShort(-1); r.writeInt(alpha.length);
-            for (int c = 0; c < 3; c++) { r.writeShort(c); r.writeInt(grey.length); }
+            r.writeShort(0); r.writeInt(red.length);
+            r.writeShort(1); r.writeInt(green.length);
+            r.writeShort(2); r.writeInt(blue.length);
             if (mask != null) { r.writeShort(-2); r.writeInt(mask.length); }
             r.writeBytes("8BIM" + KEYS[l.blend]);
             r.writeByte(l.opacity);
@@ -365,7 +366,7 @@ final class Psd {
             r.write(name, 0, nl);
             r.write(new byte[padded - nl - 1]);
             data.write(alpha);
-            data.write(grey); data.write(grey); data.write(grey);
+            data.write(red); data.write(green); data.write(blue);
             if (mask != null) data.write(mask);
             records++;
             if (closes) {
@@ -388,12 +389,12 @@ final class Psd {
         if (pad == 1) out.writeByte(0);
         out.writeInt(0); // global mask info
 
-        // Merged composite (grey, so R=G=B)
-        byte[] g = channel(flat, 0, false);
+        // Merged composite: red, green, blue (row counts for all three first, then the rows)
+        byte[][] cc = {channel(flat, 16, false), channel(flat, 8, false), channel(flat, 0, false)};
         int countsLen = h * 2;
         out.writeShort(1);
-        for (int c = 0; c < 3; c++) out.write(g, 0, countsLen);
-        for (int c = 0; c < 3; c++) out.write(g, countsLen, g.length - countsLen);
+        for (byte[] c : cc) out.write(c, 0, countsLen);
+        for (byte[] c : cc) out.write(c, countsLen, c.length - countsLen);
         out.flush();
     }
 
@@ -423,7 +424,7 @@ final class Psd {
         for (int c = 0; c < 4; c++) data.write(new byte[2]); // raw, zero size
     }
 
-    /** One channel, RLE: [compression flag if withFlag] + row counts + rows. shift 24 = alpha, 0 = blue/grey. */
+    /** One channel, RLE: [compression flag if withFlag] + row counts + rows. shift 24 = alpha, 16 red, 8 green, 0 blue. */
     private static byte[] channel(Bitmap b, int shift, boolean withFlag) {
         int w = b.getWidth(), h = b.getHeight();
         int[] px = new int[w];

@@ -329,7 +329,7 @@ public class ProcreateParityTest extends Base {
         Object[] adjs = (Object[]) call(act, "adjustments");
         Object inv = null;
         for (Object a : adjs) if (get(a, "name").equals("Invert")) inv = a;
-        cv.setBackground(255, true);
+        cv.setBackground(gc(255), true);
         cv.fillLayer();
         call(act, "startAdjust", inv);
         settle();

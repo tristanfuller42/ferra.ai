@@ -1,6 +1,6 @@
 # Inkwell
 
-A tiny greyscale drawing app for Android (built for Pixel Fold). No libraries, plain Java.
+A small, fast drawing app for Android (built for Pixel Fold), in full colour. No libraries, plain Java.
 
 ## Install on your phone
 1. On the phone, open the repo's **Releases** page → **Latest build** → tap `inkwell.apk`.
@@ -19,11 +19,10 @@ Layout matches Procreate so you can switch between the two easily:
   Drag/pinch/twist (Uniform), Distort (drag corners), Flip H/V, Rotate 90°, Reset. Moves only the selection if there is one.
 - **Adjustments**: Gaussian Blur, Motion Blur, Perspective Blur, Noise, Sharpen, Bloom, Glitch, Halftone, Liquify
   (push, twirl, pinch, expand, reconstruct), Clone, Brightness/Contrast, Curves, plus Threshold, Posterize, Invert.
-  Slide left/right on the canvas to change the amount. Colour-only adjustments (hue, colour balance, recolor,
-  chromatic aberration, gradient map) are left out on purpose: Inkwell is greyscale.
+  Slide left/right on the canvas to change the amount.
 - **Smudge**: uses the current brush shape.
 - **ColorDrop**: drag the colour circle onto the canvas to fill an area.
-- **Background colour**: bottom row of the Layers panel, like Procreate. Tap to pick its grey, tap the dot to hide it
+- **Background colour**: bottom row of the Layers panel, like Procreate. Tap to pick its colour, tap the dot to hide it
   (transparent PNG/WebP/PSD; JPEG/PDF get white). You never paint on it: every drawing starts with a blank Layer 1.
 - **Layers**: tap the selected layer for options: rename, select, copy, fill, clear, alpha lock, clipping mask,
   invert, merge down, blend mode (12 modes), delete. Tap the letter on a layer to change its blend mode.
@@ -40,7 +39,7 @@ Layout matches Procreate so you can switch between the two easily:
   Apply, disable or delete the mask. Saved in PSD.
 - **Layer groups**: Group with layer below / New group; collapse, hide, rename, group opacity, flatten. Saved in PSD.
 - **Selections**: Save and Load in the selection bar (kept with each drawing). Selection changes can be undone like paint.
-- **Reference window**: Actions → Reference. Shows the whole canvas live, or an imported image (tap it to pick a grey).
+- **Reference window**: Actions → Reference. Shows the whole canvas live, or an imported image (tap it to pick a colour).
   Drag the title to move, ⤡ to resize.
 - **Time-lapse**: every stroke is recorded. Actions → Video → replay (full screen; touch and hold to pause, drag left/right to scrub), or export MP4 (full length or 30 seconds).
 - **Animation Assist**: Actions → Animation Assist. Each layer is a frame; timeline with play, onion skins,
@@ -68,7 +67,7 @@ Layout matches Procreate so you can switch between the two easily:
 - **Liquify**: Crystals and Edge modes, Momentum slider.
 - **Camera**: Actions → Add → Take a photo (imported as a layer).
 - **Stylus tilt**: pencils and charcoal get wider/lighter when the pen leans (Brush Studio → Dynamics → Tilt).
-- **Eyedropper ring**: new grey on top, previous grey below.
+- **Eyedropper ring**: new colour on top, previous colour below.
 - **QuickShape**: also arc, triangle and polyline (all with edit handles; second finger = equilateral / 15° segments).
 - **QuickMenu**: 6 shortcuts in a ring. Prefs → Gesture controls: open it with touch-and-hold or the sidebar square button;
   long-press a slot to change it: an action, a brush ("A brush…") or an eraser ("An eraser…").
@@ -97,10 +96,20 @@ Layout matches Procreate so you can switch between the two easily:
   never double up, they just reveal more of the same dots. Any brush can do this: Brush Studio → Rendering → Halftone grid.
 - **More brushes** (about 50): new sets Calligraphy, Charcoals, Drawing, Textures, Spray paints, Elements.
 - **Shape / Grain source**: Brush Studio → Shape or Grain → Import a picture (Invert, or go back to round / no grain).
-- **Colour Fill**: Selection → Freehand, Rectangle or Ellipse with Colour Fill on: the shape is filled with the grey.
+- **Colour Fill**: Selection → Freehand, Rectangle or Ellipse with Colour Fill on: the shape is filled with your colour.
 - **Rotational symmetry**: Drawing Guide → Symmetry → switch between mirrored and rotated copies.
 - **Photo**: Gallery → Photo (new drawing) and Actions → Add → Insert a photo use Android's photo picker.
 - **Liquify Distortion** slider; **Selection mask visibility** in Prefs.
+
+### Colour
+- **Colour panel** (tap the colour circle): Disc, Classic, Harmony (complementary, split, analogous, triadic, tetradic),
+  Value (HSB/RGB sliders and a hex code) and Palettes. The tab you pick is remembered. Current and previous colour at
+  the top (tap the previous one to go back); your default palette and recent colours under every tab.
+- **Palettes**: make, rename, delete; ＋ adds the current colour; hold a colour to remove it; ★ marks the default.
+  Import and export Procreate **.swatches** files.
+- **Colour adjustments**: Hue/Saturation/Brightness, Colour Balance, Gradient Map (plus all the tone adjustments).
+- Everything works in colour: brushes, smudge, fills (stop at colour changes too), eyedropper, text, background,
+  PSD/PNG/JPEG/GIF/animated PNG/MP4. Painting on a layer mask uses the brightness of your colour.
 
 ### Gallery
 Inkwell opens in the Gallery like Procreate. ＋ New (size presets), Import (any supported file), tap to open,
@@ -129,7 +138,7 @@ long-press to rename, duplicate or delete. Drawings save automatically.
   - Two-finger tap = undo. Two-finger **hold** = keep undoing. Three-finger tap = redo.
   - Three-finger **scrub** (side to side) = clear layer. Three-finger **swipe down** = copy & paste menu.
   - Four-finger tap = hide/show toolbar (full screen).
-  - Touch and **hold** with a finger = eyedropper (pick a grey); keep dragging to adjust.
+  - Touch and **hold** with a finger = eyedropper (pick a colour); keep dragging to adjust.
   - Draw and **hold** at the end = QuickShape: snaps to a straight line (keep holding and move to adjust),
     or an ellipse if the stroke ends near where it started.
 - **Move tool**: drag moves the current layer; pinch/twist scales and rotates it. Applied when you pick another tool.
@@ -141,7 +150,6 @@ long-press to rename, duplicate or delete. Drawings save automatically.
 
 ## Files
 - **Open / Import as layer**: PSD (layers kept), PNG, JPEG, WebP, HEIC, AVIF, GIF, BMP, PDF (page 1).
-  Colours are converted to greyscale.
 - **Export**: PNG, JPEG, WebP, PDF, PSD (with layers).
 - You can also "Open with" / "Share to" Inkwell from other apps.
 

@@ -38,14 +38,14 @@ public class ExtraTest extends Base {
     }
 
     @Test public void eyedropper_hold() {
-        cv.grey = 128;
+        cv.color = gc(128);
         cv.fillLayer();
-        cv.grey = 0;
+        cv.color = gc(0);
         t0 = android.os.SystemClock.uptimeMillis();
         touch(cv, ev(MotionEvent.ACTION_DOWN, new float[][]{{W * .5f, H * .5f}}, MotionEvent.TOOL_TYPE_FINGER, 1));
         ShadowLooper.idleMainLooper(600, java.util.concurrent.TimeUnit.MILLISECONDS);
         touch(cv, ev(MotionEvent.ACTION_UP, new float[][]{{W * .5f, H * .5f}}, MotionEvent.TOOL_TYPE_FINGER, 1));
-        assertEquals("picked grey", 128, cv.grey, 2);
+        assertEquals("picked grey", 128, cv.color & 255, 2);
         assertEquals("no stroke left behind", 1, 1);
     }
 

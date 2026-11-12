@@ -19,7 +19,7 @@ final class Ui {
     static final class Icon extends View {
         final int kind;
         boolean on;
-        int grey;
+        int color = 0xFF000000; // the colour button shows the ink colour
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path path = new Path();
 
@@ -115,7 +115,7 @@ final class Ui {
                     break;
                 case COLOR:
                     p.setStyle(Paint.Style.FILL);
-                    p.setColor(Color.rgb(grey, grey, grey));
+                    p.setColor(0xFF000000 | color);
                     c.drawCircle(12, 12, 9, p);
                     p.setStyle(Paint.Style.STROKE);
                     p.setColor(on ? ACCENT : ICON);
@@ -137,7 +137,7 @@ final class Ui {
     static final class CurveView extends View {
         final java.util.ArrayList<float[]> pts = new java.util.ArrayList<>();
         Runnable listener;
-        int[] hist; // 256 bins of the layer's greys, drawn faintly behind the curve
+        int[] hist; // 256 bins of the layer's brightness, drawn faintly behind the curve
         private int drag = -1, lastTapped = -1;
         private long lastTap;
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);

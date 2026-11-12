@@ -64,11 +64,11 @@ public class CanvasView extends View {
         public String text, font = "sans-serif";
         public float size;
         public boolean bold;
-        public int align, grey;           // align: 0 left, 1 centre, 2 right
+        public int align, color;          // align: 0 left, 1 centre, 2 right; color = text colour (opaque RGB)
         public float spacing, lineSpacing = 1f; // letter spacing (em) and line spacing (× normal)
         public boolean underline, outline;
-        public TextInfo(String t, float size, boolean bold, int align, String font, int grey) {
-            text = t; this.size = size; this.bold = bold; this.align = align; this.font = font; this.grey = grey;
+        public TextInfo(String t, float size, boolean bold, int align, String font, int color) {
+            text = t; this.size = size; this.bold = bold; this.align = align; this.font = font; this.color = color;
         }
     }
 
@@ -116,7 +116,7 @@ public class CanvasView extends View {
     public Runnable onChange;
 
     public int tool = DRAW;
-    public int grey = 0;                 // ink: 0 = black .. 255 = white
+    public int color = 0xFF000000;       // ink colour (opaque RGB)
     public float size = 12f;
     private boolean stylusSeen;
     /** What one finger does once a stylus has been used: 0 navigate (palm rejection), 1 paint, 2 erase. */
@@ -136,17 +136,17 @@ public class CanvasView extends View {
     private final Paint paper = new Paint();
 
     /** Background colour (like Procreate's "Background colour" layer): never painted on directly. */
-    public int bgGrey = 255;
+    public int bgColor = Color.WHITE;
     public boolean bgVisible = true;
 
     /** Colour used where a solid picture is needed (video, thumbnails, reference). */
-    public int paperColor() { return bgVisible ? Color.rgb(bgGrey, bgGrey, bgGrey) : Color.WHITE; }
+    public int paperColor() { return bgVisible ? 0xFF000000 | bgColor : Color.WHITE; }
 
-    public void setBackground(int grey, boolean visible) {
+    public void setBackground(int col, boolean visible) {
         named("Background colour");
-        int og = bgGrey; boolean ov = bgVisible;
-        if (og == grey && ov == visible) return;
-        apply(new Op(() -> { bgGrey = og; bgVisible = ov; }, () -> { bgGrey = grey; bgVisible = visible; }, 64));
+        int og = bgColor; boolean ov = bgVisible;
+        if (og == col && ov == visible) return;
+        apply(new Op(() -> { bgColor = og; bgVisible = ov; }, () -> { bgColor = col; bgVisible = visible; }, 64));
     }
 
     private android.graphics.BitmapShader checker;
@@ -565,7 +565,7 @@ public class CanvasView extends View {
 
     public void setDocument(int w, int h, List<Layer> ls) {
         docW = w; docH = h;
-        bgGrey = 255; bgVisible = true;
+        bgColor = Color.WHITE; bgVisible = true;
         groups.clear();
         nextGroup = 1;
         layers.clear();
@@ -1262,7 +1262,7 @@ public class CanvasView extends View {
             }
             if (selFill && !selSubtract) { // Colour Fill preview while drawing the shape
                 Paint fp = new Paint(Paint.ANTI_ALIAS_FLAG);
-                fp.setColor(0x99000000 | grey * 0x10101);
+                fp.setColor(0x99000000 | (color & 0xFFFFFF));
                 c.drawPath(selPath, fp);
             }
             g.setColor(0xFF3D9BFF);
@@ -1358,7 +1358,7 @@ public class CanvasView extends View {
             return;
         }
         abortStroke();
-        pickOld = grey;
+        pickOld = color;
         picking = true;
         pickAt(downSX, downSY);
     };
@@ -1673,7 +1673,7 @@ public class CanvasView extends View {
         }
     }
 
-    /** Sets the ink grey to the composited colour under a screen point. */
+    /** Sets the ink colour to the composited colour under a screen point. */
     /** Brush size preview while the size slider moves (like Procreate): the real tip at its on-screen size. */
     private float sizePrevX = -1, sizePrevY;
     private boolean sizePrevRight;
@@ -1688,8 +1688,8 @@ public class CanvasView extends View {
         float cx = sizePrevRight ? sizePrevX - r - 6 : sizePrevX + r + 6, cy = Math.max(r, Math.min(getHeight() - r, sizePrevY));
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         p.setColor(Color.WHITE);
-        c.drawCircle(cx, cy, r + 6, p); // paper behind the tip so any grey shows
-        int ink = 0xFF000000 | grey * 0x10101;
+        c.drawCircle(cx, cy, r + 6, p); // paper behind the tip so any colour shows
+        int ink = inkColor();
         if (brush.tip != null) {
             Bitmap t = Bitmap.createBitmap(brush.tw[0], brush.th[0], Bitmap.Config.ALPHA_8);
             t.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(brush.tip[0]));
@@ -1714,9 +1714,9 @@ public class CanvasView extends View {
     }
 
     private float pickSX, pickSY;
-    private int pickOld; // grey before this eyedropper touch (bottom half of the ring)
+    private int pickOld; // colour before this eyedropper touch (bottom half of the ring)
 
-    /** Eyedropper ring like Procreate: new grey on top, previous grey below, around the finger. */
+    /** Eyedropper ring like Procreate: new colour on top, previous colour below, around the finger. */
     private void drawLoupe(Canvas c) {
         if (!picking) return;
         float d = getResources().getDisplayMetrics().density, ro = 62 * d, w = 22 * d, r = ro - w / 2;
@@ -1724,9 +1724,9 @@ public class CanvasView extends View {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeWidth(w);
-        p.setColor(0xFF000000 | grey * 0x10101);
+        p.setColor(0xFF000000 | color);
         c.drawArc(o, 180, 180, false, p);
-        p.setColor(0xFF000000 | pickOld * 0x10101);
+        p.setColor(0xFF000000 | pickOld);
         c.drawArc(o, 0, 180, false, p);
         p.setStrokeWidth(1.5f * d);
         p.setColor(0x99000000);
@@ -1744,14 +1744,17 @@ public class CanvasView extends View {
         map(sx, sy);
         int x = (int) pt[0], y = (int) pt[1];
         if (x < 0 || y < 0 || x >= docW || y >= docH) return;
-        float g = paperColor() & 255;
+        int pc = paperColor();
+        float cr = (pc >> 16) & 255, cg = (pc >> 8) & 255, cb = pc & 255;
         for (Layer l : layers) {
             if (!l.visible) continue;
             int px = l.bmp.getPixel(x, y);
             float a = (px >>> 24) / 255f * l.opacity / 255f;
-            g = (px & 255) * a + g * (1 - a);
+            cr = ((px >> 16) & 255) * a + cr * (1 - a);
+            cg = ((px >> 8) & 255) * a + cg * (1 - a);
+            cb = (px & 255) * a + cb * (1 - a);
         }
-        grey = Math.round(g);
+        color = Color.rgb(Math.round(cr), Math.round(cg), Math.round(cb));
         if (onGreyPicked != null) onGreyPicked.run();
     }
 
@@ -1804,7 +1807,7 @@ public class CanvasView extends View {
 
         if (pickNext && action == MotionEvent.ACTION_DOWN) { // eyedropper button armed
             pickNext = false;
-            pickOld = grey;
+            pickOld = color;
             picking = true;
             stroking = false;
             pickAt(e.getX(), e.getY());
@@ -2134,7 +2137,7 @@ public class CanvasView extends View {
 
     // ---------- Brush engine ----------
     // Each stroke stamps round "dabs" into a coverage mask (max, so overlaps don't darken),
-    // then the mask is composited onto the layer's pre-stroke pixels with the ink grey.
+    // then the mask is composited onto the layer's pre-stroke pixels with the ink colour.
 
     public float globalCurve = 1f, globalSmooth = 0f; // Prefs: pressure and smoothing for every brush
 
@@ -2445,7 +2448,8 @@ public class CanvasView extends View {
         int[] cl = adjPaint ? adjBlock(r) : cloning ? cloneBlock(r) : null;
         boolean lock = tgt().alphaLock;
         byte[] sm = sel;
-        int ink0 = grey, bm = Math.round(brush.blend);
+        int ink0 = inkColor(), bm = Math.round(brush.blend);
+        int iR0 = (ink0 >> 16) & 255, iG0 = (ink0 >> 8) & 255, iB0 = ink0 & 255;
         boolean patternPaint = brush.pattern >= 0.5f && !erasing && !smudging;
         for (int y = 0; y < h; y++) {
             int mrow = (r.top + y) * docW + r.left, brow = y * w;
@@ -2454,31 +2458,38 @@ public class CanvasView extends View {
                 if (sm != null) m = m * (sm[mrow + x] & 255) / 255;
                 if (m == 0) continue;
                 int px = buf[brow + x];
-                int A = px >>> 24, G = px & 255;
-                int ink = bm == 0 || A == 0 ? ink0 : (paintBlend(bm, ink0, G) * A + ink0 * (255 - A)) / 255;
-                int nA, nG;
-                if (erasing) { if (lock) continue; nA = A * (255 - m) / 255; nG = G; }
+                int A = px >>> 24, R = (px >> 16) & 255, G = (px >> 8) & 255, B = px & 255;
+                int iR = iR0, iG = iG0, iB = iB0;
+                if (bm != 0 && A != 0) { // brush blend mode, over what is already on the layer
+                    iR = (paintBlend(bm, iR0, R) * A + iR0 * (255 - A)) / 255;
+                    iG = (paintBlend(bm, iG0, G) * A + iG0 * (255 - A)) / 255;
+                    iB = (paintBlend(bm, iB0, B) * A + iB0 * (255 - A)) / 255;
+                }
+                int nA, nR, nG, nB;
+                if (erasing) { if (lock) continue; nA = A * (255 - m) / 255; nR = R; nG = G; nB = B; }
                 else if (cl != null) {
-                    int cp = cl[brow + x], Ac = cp >>> 24, Gc = cp & 255;
+                    int cp = cl[brow + x], Ac = cp >>> 24, Rc = (cp >> 16) & 255, Gc = (cp >> 8) & 255, Bc = cp & 255;
                     int sa = Ac * m / 255;
-                    if (lock) { nA = A; nG = G + (Gc - G) * sa / 255; }
+                    if (lock) { nA = A; nR = R + (Rc - R) * sa / 255; nG = G + (Gc - G) * sa / 255; nB = B + (Bc - B) * sa / 255; }
                     else {
                         int keep = A * (255 - sa) / 255;
                         nA = sa + keep;
-                        nG = nA == 0 ? 0 : (Gc * sa + G * keep) / nA;
+                        if (nA == 0) { nR = nG = nB = 0; }
+                        else { nR = (Rc * sa + R * keep) / nA; nG = (Gc * sa + G * keep) / nA; nB = (Bc * sa + B * keep) / nA; }
                     }
                 }
-                else if (lock) { nA = A; nG = G + (ink - G) * m / 255; }
-                else if (patternPaint && G == ink) { // halftone over halftone: keep the darker of the two, never add up
+                else if (lock) { nA = A; nR = R + (iR - R) * m / 255; nG = G + (iG - G) * m / 255; nB = B + (iB - B) * m / 255; }
+                else if (patternPaint && R == iR && G == iG && B == iB) { // halftone over halftone: keep the stronger, never add up
                     if (m <= A) continue;
-                    nA = m; nG = ink;
+                    nA = m; nR = iR; nG = iG; nB = iB;
                 }
                 else {
                     int keep = A * (255 - m) / 255;
                     nA = m + keep;
-                    nG = nA == 0 ? 0 : (ink * m + G * keep) / nA;
+                    if (nA == 0) { nR = nG = nB = 0; }
+                    else { nR = (iR * m + R * keep) / nA; nG = (iG * m + G * keep) / nA; nB = (iB * m + B * keep) / nA; }
                 }
-                buf[brow + x] = (nA << 24) | (nG * 0x010101);
+                buf[brow + x] = (nA << 24) | (nR << 16) | (nG << 8) | nB;
             }
         }
         tgt().bmp.setPixels(buf, 0, w, r.left, r.top, w, h);
@@ -2488,7 +2499,14 @@ public class CanvasView extends View {
         invalidate();
     }
 
-    /** The brush's blend mode: what the ink becomes over grey g (Brush Studio → Rendering). */
+    /** The ink colour for painting: the chosen colour, or its brightness as grey when painting a layer mask. */
+    int inkColor() {
+        Layer l = current < layers.size() ? layers.get(current) : null;
+        if (l != null && l.editMask && l.mask != null) { int g = Fx.lum(color); return 0xFF000000 | g * 0x10101; }
+        return 0xFF000000 | (color & 0xFFFFFF);
+    }
+
+    /** The brush's blend mode, per colour channel: what the ink becomes over value g (Brush Studio → Rendering). */
     private static int paintBlend(int mode, int ink, int g) {
         switch (mode) {
             case 1: return ink * g / 255;                                      // multiply
@@ -2558,8 +2576,11 @@ public class CanvasView extends View {
                 int d = dst[i], sp = src[i];
                 int aD = d >>> 24, aS = sp >>> 24;
                 int na = aD + (aS - aD) * v / 255;
-                int pg = (d & 255) * aD + ((sp & 255) * aS - (d & 255) * aD) * v / 255;
-                dst[i] = Fx.pix(na, na == 0 ? 0 : Fx.clamp(pg / na));
+                if (na == 0) { dst[i] = 0; continue; }
+                int pr = Fx.red(d) * aD + (Fx.red(sp) * aS - Fx.red(d) * aD) * v / 255;
+                int pg = Fx.green(d) * aD + (Fx.green(sp) * aS - Fx.green(d) * aD) * v / 255;
+                int pb = Fx.blue(d) * aD + (Fx.blue(sp) * aS - Fx.blue(d) * aD) * v / 255;
+                dst[i] = Fx.pix(na, pr / na, pg / na, pb / na);
             }
         L.setPixels(dst, 0, bw, x0, y0, bw, bh);
         if (eventDirty.isEmpty()) eventDirty.set(x0, y0, x0 + bw, y0 + bh);
@@ -3167,7 +3188,7 @@ public class CanvasView extends View {
         shapeSelected(m);
     }
 
-    public boolean selFill; // Colour Fill: a freehand/polygon/rectangle/ellipse selection is also filled with the ink grey
+    public boolean selFill; // Colour Fill: a freehand/polygon/rectangle/ellipse selection is also filled with the ink colour
 
     /** A drawn selection shape is finished: add it to the selection, and fill it when Colour Fill is on. */
     private void shapeSelected(byte[] m) {
@@ -3383,7 +3404,7 @@ public class CanvasView extends View {
 
     // ---------- Colour fill (ColorDrop) ----------
 
-    /** Fills the area under a screen point on the current layer with the ink grey. */
+    /** Fills the area under a screen point on the current layer with the ink colour. */
     public boolean fillMode;          // "Continue filling": taps fill
     public int fillThreshold = 30;
     private int lastFillX = -1, lastFillY;
@@ -3430,14 +3451,15 @@ public class CanvasView extends View {
     /** Paints ink over px where mask (and selection) allow. */
     private void fillWith(int[] px, byte[] m) {
         boolean lock = tgt().alphaLock;
+        int ink = inkColor(), iR = Fx.red(ink), iG = Fx.green(ink), iB = Fx.blue(ink);
         for (int i = 0; i < px.length; i++) {
             int k = m == null ? 255 : m[i] & 255;
             if (sel != null) k = k * (sel[i] & 255) / 255;
             if (k == 0) continue;
-            int A = px[i] >>> 24, G = px[i] & 255;
-            if (lock) { px[i] = Fx.pix(A, G + (grey - G) * k / 255); continue; }
+            int p = px[i], A = p >>> 24, R = Fx.red(p), G = Fx.green(p), B = Fx.blue(p);
+            if (lock) { px[i] = Fx.pix(A, R + (iR - R) * k / 255, G + (iG - G) * k / 255, B + (iB - B) * k / 255); continue; }
             int keep = A * (255 - k) / 255, nA = k + keep;
-            px[i] = Fx.pix(nA, nA == 0 ? 0 : (grey * k + G * keep) / nA);
+            px[i] = nA == 0 ? 0 : Fx.pix(nA, (iR * k + R * keep) / nA, (iG * k + G * keep) / nA, (iB * k + B * keep) / nA);
         }
     }
 
@@ -3754,7 +3776,8 @@ public class CanvasView extends View {
                 int p = bilinear(liqSrc, sx, sy);
                 if (sel != null) {
                     int m = sel[Y * docW + X] & 255, o = liqSrc[Y * docW + X];
-                    if (m < 255) p = Fx.pix(((o >>> 24) * (255 - m) + (p >>> 24) * m) / 255, ((o & 255) * (255 - m) + (p & 255) * m) / 255);
+                    if (m < 255) p = Fx.pix(((o >>> 24) * (255 - m) + (p >>> 24) * m) / 255, (Fx.red(o) * (255 - m) + Fx.red(p) * m) / 255,
+                            (Fx.green(o) * (255 - m) + Fx.green(p) * m) / 255, (Fx.blue(o) * (255 - m) + Fx.blue(p) * m) / 255);
                 }
                 out[y * w + x] = p;
             }
@@ -3772,9 +3795,11 @@ public class CanvasView extends View {
         float a00 = p00 >>> 24, a10 = p10 >>> 24, a01 = p01 >>> 24, a11 = p11 >>> 24;
         float a = (a00 * (1 - tx) + a10 * tx) * (1 - ty) + (a01 * (1 - tx) + a11 * tx) * ty;
         if (a < 0.5f) return 0;
-        float g = ((p00 & 255) * a00 * (1 - tx) + (p10 & 255) * a10 * tx) * (1 - ty)
-                + ((p01 & 255) * a01 * (1 - tx) + (p11 & 255) * a11 * tx) * ty;
-        return Fx.pix(Math.round(a), Fx.clamp(Math.round(g / a)));
+        float w00 = a00 * (1 - tx) * (1 - ty), w10 = a10 * tx * (1 - ty), w01 = a01 * (1 - tx) * ty, w11 = a11 * tx * ty;
+        float r = Fx.red(p00) * w00 + Fx.red(p10) * w10 + Fx.red(p01) * w01 + Fx.red(p11) * w11;
+        float g = Fx.green(p00) * w00 + Fx.green(p10) * w10 + Fx.green(p01) * w01 + Fx.green(p11) * w11;
+        float b = Fx.blue(p00) * w00 + Fx.blue(p10) * w10 + Fx.blue(p01) * w01 + Fx.blue(p11) * w11;
+        return Fx.pix(Math.round(a), Math.round(r / a), Math.round(g / a), Math.round(b / a));
     }
 
     // ---------- Layer masks ----------
@@ -3912,9 +3937,9 @@ public class CanvasView extends View {
         apply(new Op(() -> l.name = old, () -> l.name = name, 64));
     }
 
-    /** New layer with text, centred, in the ink grey. */
+    /** New layer with text, centred, in the ink colour. */
     public boolean addTextLayer(String text, float sizePx, boolean bold) {
-        return addTextLayer(new TextInfo(text, sizePx, bold, 1, "sans-serif", grey));
+        return addTextLayer(new TextInfo(text, sizePx, bold, 1, "sans-serif", color));
     }
 
     /** New layer with editable text, centred on the canvas. */
@@ -3944,7 +3969,7 @@ public class CanvasView extends View {
 
     private void drawText(Layer l, TextInfo t, float cx, float cy) {
         android.text.TextPaint tp = new android.text.TextPaint(Paint.ANTI_ALIAS_FLAG);
-        tp.setColor(Color.rgb(t.grey, t.grey, t.grey));
+        tp.setColor(0xFF000000 | t.color);
         tp.setTextSize(t.size);
         tp.setTypeface(typeface(getContext(), t.font, t.bold));
         tp.setLetterSpacing(t.spacing);
@@ -4300,7 +4325,7 @@ public class CanvasView extends View {
         CanvasView v = new CanvasView(ctx);
         v.setDocument(w, h, new ArrayList<>());
         v.brush = b;
-        v.grey = 255;
+        v.color = 0xFFFFFFFF;
         v.size = h * 0.34f;
         v.penInput = true;
         v.stroking = true;

@@ -192,7 +192,7 @@ public class FeatureTest extends Base {
         assertNotNull(cv.cur().mask);
         assertTrue(cv.cur().editMask);
         long layerInk = inkSum(cv.cur().bmp);
-        cv.grey = 0;
+        cv.color = gc(0);
         line(W * .2f, H * .5f, W * .5f, H * .5f); // hide left half
         assertEquals("painting mask keeps layer pixels", layerInk, inkSum(cv.cur().bmp));
         Bitmap flat = cv.flatten();
@@ -527,7 +527,7 @@ public class FeatureTest extends Base {
         assertTrue("drawing goes on the layer", inkSum(L()) > 0);
         Bitmap f = cv.flatten();
         assertEquals("background untouched", 0xFFFFFFFF, f.getPixel(5, 5));
-        cv.setBackground(80, true);
+        cv.setBackground(gc(80), true);
         f = cv.flatten();
         assertEquals("background colour changed", 80, f.getPixel(5, 5) & 255);
         assertEquals("layer pixels unchanged by background", 255, f.getPixel(5, 5) >>> 24);
@@ -537,7 +537,7 @@ public class FeatureTest extends Base {
         call(act, "togglePanel");
         settle();
         shot("62_background_row");
-        cv.setBackground(80, false);
+        cv.setBackground(gc(80), false);
         settle();
         shot("63_background_hidden");
         assertEquals("hidden background is transparent", 0, cv.flatten().getPixel(5, 5) >>> 24);
@@ -549,14 +549,14 @@ public class FeatureTest extends Base {
         assertEquals("PNG keeps transparency", 0, pb.getPixel(5, 5) >>> 24);
         assertTrue("JPEG gets white", (jb.getPixel(5, 5) & 255) > 245);
         // kept per drawing
-        cv.setBackground(40, true);
+        cv.setBackground(gc(40), true);
         String id = (String) get(act, "curId");
         call(act, "showGallery"); settle();
         call(act, "newGalleryItem", 800, 800); settle();
-        assertEquals("other drawing starts white", 255, cv.bgGrey);
+        assertEquals("other drawing starts white", 0xFFFFFF, cv.bgColor & 0xFFFFFF);
         call(act, "showGallery"); settle();
         call(act, "openGalleryItem", id); settle();
-        assertEquals("background restored", 40, cv.bgGrey);
+        assertEquals("background restored", gc(40), cv.bgColor);
         assertTrue(cv.bgVisible);
     }
 

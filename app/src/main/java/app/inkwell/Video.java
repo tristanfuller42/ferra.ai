@@ -98,14 +98,15 @@ final class Video {
         }
     }
 
-    // ---------------- GIF (256 greys = exact for greyscale art) ----------------
+    // ---------------- GIF (colour: 6x6x6 colour cube + 40 exact greys, ordered dithering) ----------------
 
     static void gif(OutputStream os, int w, int h, int fps, Frames frames) throws IOException {
         OutputStream o = new java.io.BufferedOutputStream(os, 65536);
         o.write("GIF89a".getBytes("US-ASCII"));
         le16(o, w); le16(o, h);
         o.write(0xF7); o.write(0); o.write(0);
-        for (int i = 0; i < 256; i++) { o.write(i); o.write(i); o.write(i); }
+        for (int i = 0; i < 216; i++) { o.write(i / 36 * 51); o.write(i / 6 % 6 * 51); o.write(i % 6 * 51); }
+        for (int i = 0; i < 40; i++) { int g = Math.round(i * 255 / 39f); o.write(g); o.write(g); o.write(g); }
         o.write(new byte[]{0x21, (byte) 0xFF, 0x0B});
         o.write("NETSCAPE2.0".getBytes("US-ASCII"));
         o.write(new byte[]{3, 1, 0, 0, 0}); // loop forever
@@ -118,7 +119,7 @@ final class Video {
             s.getPixels(px, 0, w, 0, 0, w, h);
             if (s != b) s.recycle();
             b.recycle();
-            for (int i = 0; i < px.length; i++) idx[i] = (byte) grey(px[i]);
+            for (int i = 0; i < px.length; i++) idx[i] = (byte) gifIndex(px[i], i % w, i / w);
             o.write(new byte[]{0x21, (byte) 0xF9, 4, 0});
             le16(o, delay);
             o.write(0); o.write(0);
@@ -129,6 +130,18 @@ final class Video {
         }
         o.write(0x3B);
         o.flush();
+    }
+
+    private static final int[] BAYER = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
+
+    /** Palette index for a pixel (over white): exact-ish greys for grey pixels, dithered colour cube otherwise. */
+    static int gifIndex(int p, int x, int y) {
+        int a = p >>> 24;
+        int r = (((p >> 16) & 255) * a + 255 * (255 - a)) / 255, g = (((p >> 8) & 255) * a + 255 * (255 - a)) / 255, b = ((p & 255) * a + 255 * (255 - a)) / 255;
+        if (Math.max(r, Math.max(g, b)) - Math.min(r, Math.min(g, b)) < 10) return 216 + Math.round((r + g + b) / 3f * 39 / 255);
+        float t = (BAYER[(y & 3) * 4 + (x & 3)] + 0.5f) / 16f - 0.5f; // ordered dither, ±half a step
+        int qr = Math.max(0, Math.min(5, Math.round(r / 51f + t))), qg = Math.max(0, Math.min(5, Math.round(g / 51f + t))), qb = Math.max(0, Math.min(5, Math.round(b / 51f + t)));
+        return qr * 36 + qg * 6 + qb;
     }
 
     static int grey(int p) {
@@ -192,15 +205,15 @@ final class Video {
         }
     }
 
-    // ---------------- Animated PNG (keeps transparency, full grey range) ----------------
+    // ---------------- Animated PNG (full colour, keeps transparency) ----------------
 
-    /** Writes an APNG: every frame shown for 1/fps second, looping forever. Frames are greyscale + alpha. */
+    /** Writes an APNG: every frame shown for 1/fps second, looping forever. Frames are RGBA. */
     static void apng(OutputStream os, int w, int h, int fps, Frames frames) throws IOException {
         OutputStream o = new java.io.BufferedOutputStream(os, 65536);
         o.write(new byte[]{(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'});
         java.io.ByteArrayOutputStream c = new java.io.ByteArrayOutputStream();
         java.io.DataOutputStream d = new java.io.DataOutputStream(c);
-        d.writeInt(w); d.writeInt(h); d.writeByte(8); d.writeByte(4); d.writeByte(0); d.writeByte(0); d.writeByte(0); // grey + alpha
+        d.writeInt(w); d.writeInt(h); d.writeByte(8); d.writeByte(6); d.writeByte(0); d.writeByte(0); d.writeByte(0); // RGBA
         chunk(o, "IHDR", c.toByteArray());
         int n = frames.count();
         c.reset(); d.writeInt(n); d.writeInt(0); // loop forever
@@ -217,10 +230,13 @@ final class Video {
             chunk(o, "fcTL", c.toByteArray());
             java.io.ByteArrayOutputStream z = new java.io.ByteArrayOutputStream();
             try (java.util.zip.DeflaterOutputStream dz = new java.util.zip.DeflaterOutputStream(z, new java.util.zip.Deflater(6))) {
-                byte[] row = new byte[1 + w * 2];
+                byte[] row = new byte[1 + w * 4];
                 for (int y = 0; y < h; y++) {
                     row[0] = 0;
-                    for (int x = 0; x < w; x++) { int p = px[y * w + x]; row[1 + x * 2] = (byte) (p & 255); row[2 + x * 2] = (byte) (p >>> 24); }
+                    for (int x = 0; x < w; x++) {
+                        int p = px[y * w + x], k = 1 + x * 4;
+                        row[k] = (byte) (p >> 16); row[k + 1] = (byte) (p >> 8); row[k + 2] = (byte) p; row[k + 3] = (byte) (p >>> 24);
+                    }
                     dz.write(row);
                 }
             }

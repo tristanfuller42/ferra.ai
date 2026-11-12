@@ -83,14 +83,14 @@ public class BatchTwoTest extends Base {
 
     @Test public void eyedropper_ring_shows_new_and_old_grey() {
         line(W * .2f, H * .5f, W * .8f, H * .5f);
-        cv.grey = 200;
+        cv.color = gc(200);
         cv.pickNext = true;
         float[] p = {W * .5f, H * .5f};
         t0 = android.os.SystemClock.uptimeMillis();
         touch(cv, ev(MotionEvent.ACTION_DOWN, new float[][]{p}, MotionEvent.TOOL_TYPE_FINGER, 1));
         assertTrue((Boolean) get(cv, "picking"));
-        assertEquals("old grey kept for the lower half", 200, (int) (Integer) get(cv, "pickOld"));
-        assertEquals("new grey picked", 0, cv.grey);
+        assertEquals("old colour kept for the lower half", gc(200) & 0xFFFFFF, ((int) (Integer) get(cv, "pickOld")) & 0xFFFFFF);
+        assertEquals("new colour picked", 0, cv.color & 0xFFFFFF);
         settle(); shot("80_eyedropper_ring");
         touch(cv, ev(MotionEvent.ACTION_UP, new float[][]{p}, MotionEvent.TOOL_TYPE_FINGER, 1));
         assertFalse((Boolean) get(cv, "picking"));
