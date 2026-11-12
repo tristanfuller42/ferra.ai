@@ -145,6 +145,30 @@ final class Brushes {
 
     private static float clamp(float v) { return Math.max(0f, Math.min(1f, v)); }
 
+    /** Brush Studio → Shape source: any image becomes the brush tip (dark marks on light paper are flipped). */
+    static boolean applyShape(CanvasView.Brush b, byte[] img) {
+        int[] wh = new int[2];
+        byte[] t = grey(img, MAX_TIP, wh, false);
+        if (t == null) return false;
+        long sum = 0;
+        for (byte v : t) sum += v & 255;
+        if (sum / t.length > 128) for (int i = 0; i < t.length; i++) t[i] = (byte) (255 - (t[i] & 255)); // light background
+        b.setTip(t, wh[0], wh[1]);
+        return true;
+    }
+
+    /** Brush Studio → Grain source: any image becomes the paper texture (light = paint shows through). */
+    static boolean applyGrain(CanvasView.Brush b, byte[] img) {
+        int[] wh = new int[2];
+        byte[] t = grey(img, MAX_TEX, wh, false);
+        if (t == null) return false;
+        b.tex = t; b.gw = wh[0]; b.gh = wh[1];
+        if (b.grain < 0.3f) b.grain = 0.7f;
+        return true;
+    }
+
+    static void invert(byte[] t) { if (t != null) for (int i = 0; i < t.length; i++) t[i] = (byte) (255 - (t[i] & 255)); }
+
     /** Decodes an image to 0..255 "paint amount" (brightness × alpha), downscaled to max side. */
     private static byte[] grey(byte[] img, int max, int[] wh, boolean invert) {
         Bitmap b = BitmapFactory.decodeByteArray(img, 0, img.length);

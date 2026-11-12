@@ -92,6 +92,13 @@ Layout matches Procreate so you can switch between the two easily:
 - **Drawing Assist per layer**: the guide's Assisted drawing switch (and layer options) applies to the current layer.
 - **Share**: PNG files (each layer, into a folder) and Animated PNG.
 - **Text**: letter spacing, line spacing, underline, outline; layer options → Rasterize text.
+- **More brushes** (about 50): new sets Calligraphy, Charcoals, Drawing, Textures, Spray paints, Elements.
+- **Shape / Grain source**: Brush Studio → Shape or Grain → Import a picture (Invert, or go back to round / no grain).
+- **Colour Fill**: Selection → Freehand, Rectangle or Ellipse with Colour Fill on: the shape is filled with the grey.
+- **Rotational symmetry**: Drawing Guide → Symmetry → switch between mirrored and rotated copies.
+- **Photo**: Gallery → Photo (new drawing) and Actions → Add → Insert a photo use Android's photo picker.
+- **Liquify Distortion** slider; **Selection mask visibility** in Prefs.
+- **Sidebar**: drag the ⋯ grip to move the sidebar up or down; tap it for a hint; double-tap to centre it.
 
 ### Gallery
 Inkwell opens in the Gallery like Procreate. ＋ New (size presets), Import (any supported file), tap to open,

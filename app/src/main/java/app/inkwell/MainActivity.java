@@ -38,7 +38,7 @@ import java.io.OutputStream;
 
 public class MainActivity extends Activity {
     private static final long MAX_PIXELS = 3000L * 3000L;
-    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_BRUSH = 3, REQ_REF = 4, REQ_TL = 5, REQ_GIF = 6, REQ_AMP4 = 7, REQ_GALLERY = 8, REQ_CAMERA = 9, REQ_EXPORT = 10, REQ_BRUSH_EXPORT = 11, REQ_FONT = 12, REQ_TREE = 13, REQ_PDF_MANY = 14, REQ_PAGES_PDF = 15, REQ_APNG = 16, REQ_LAYERS_TREE = 17, REQ_BACKUP = 18, REQ_RESTORE = 19;
+    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_BRUSH = 3, REQ_REF = 4, REQ_TL = 5, REQ_GIF = 6, REQ_AMP4 = 7, REQ_GALLERY = 8, REQ_CAMERA = 9, REQ_EXPORT = 10, REQ_BRUSH_EXPORT = 11, REQ_FONT = 12, REQ_TREE = 13, REQ_PDF_MANY = 14, REQ_PAGES_PDF = 15, REQ_APNG = 16, REQ_LAYERS_TREE = 17, REQ_BACKUP = 18, REQ_RESTORE = 19, REQ_SHAPE = 20, REQ_GRAIN = 21;
     private static final String[] FORMATS = {"PNG", "JPEG", "WebP", "PDF", "PSD (layers)"};
     private static final String[] MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf", "image/vnd.adobe.photoshop"};
     private static final String[] EXTS = {"png", "jpg", "webp", "pdf", "psd"};
@@ -156,20 +156,35 @@ public class MainActivity extends Activity {
         sbg.setCornerRadius(12 * dp);
         side.setBackground(sbg);
         side.setPadding(0, (int) (6 * dp), 0, (int) (6 * dp));
-        TextView grip = new TextView(this); // drag to move the sidebar up or down
+        TextView grip = new TextView(this); // drag to move the sidebar up or down; tap for a hint; double-tap to centre
         grip.setText("⋯");
-        grip.setTextColor(0xFF8E8E93);
+        grip.setTextSize(20);
+        grip.setTextColor(0xFFAEAEB2);
         grip.setGravity(Gravity.CENTER);
-        float[] gy = new float[2];
+        grip.setContentDescription("Drag to move the sidebar");
+        float[] gy = new float[3]; // down y, start translation, last tap time
         grip.setOnTouchListener((v, e) -> {
-            if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) { gy[0] = e.getRawY(); gy[1] = side.getTranslationY(); }
-            else if (e.getActionMasked() == android.view.MotionEvent.ACTION_MOVE) {
-                float lim = stage.getHeight() / 2f - side.getHeight() / 2f;
-                side.setTranslationY(Math.max(-lim, Math.min(lim, gy[1] + e.getRawY() - gy[0])));
-            } else prefs.edit().putFloat("sideY", side.getTranslationY()).apply();
+            switch (e.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    gy[0] = e.getRawY(); gy[1] = side.getTranslationY();
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                    break;
+                case android.view.MotionEvent.ACTION_MOVE: {
+                    float lim = Math.max(0, stage.getHeight() / 2f - side.getHeight() / 2f);
+                    side.setTranslationY(Math.max(-lim, Math.min(lim, gy[1] + e.getRawY() - gy[0])));
+                    break;
+                }
+                case android.view.MotionEvent.ACTION_UP:
+                    if (Math.abs(e.getRawY() - gy[0]) < 8 * dp) { // a tap
+                        if (gy[2] > 0 && e.getEventTime() - gy[2] < 350) { side.setTranslationY(0); hud("Sidebar centred"); gy[2] = -1; }
+                        else { hud("Drag ⋯ to move the sidebar up or down · double-tap to centre"); gy[2] = Math.max(1, e.getEventTime()); }
+                    }
+                    prefs.edit().putFloat("sideY", side.getTranslationY()).apply();
+                    break;
+            }
             return true;
         });
-        side.addView(grip, new LinearLayout.LayoutParams(-1, (int) (22 * dp)));
+        side.addView(grip, new LinearLayout.LayoutParams(-1, (int) (34 * dp)));
         sizeS = new Ui.VSlider(this, (float) Math.sqrt((canvas.size - 1) / 149f));
         sizeS.listener = (v, done) -> { // finer control at small sizes
             canvas.size = 1 + 149 * v * v;
@@ -322,6 +337,7 @@ public class MainActivity extends Activity {
         tlOn = prefs.getBoolean("timelapse", true);
         canvas.fingerMode = prefs.getInt("fingerMode", prefs.getBoolean("fingerPaint", false) ? 1 : 2);
         canvas.holdAction = prefs.getInt("holdAction", 0);
+        canvas.selVisibility = prefs.getFloat("selVis", 1f);
         canvas.holdDelay = prefs.getInt("holdDelay", 450);
         canvas.gUndo = prefs.getBoolean("gUndo", true); canvas.gRedo = prefs.getBoolean("gRedo", true);
         canvas.gClear = prefs.getBoolean("gClear", true); canvas.gCopy = prefs.getBoolean("gCopy", true);
@@ -336,6 +352,10 @@ public class MainActivity extends Activity {
         canvas.globalSmooth = prefs.getFloat("gSmooth", 0f);
         canvas.undoHoldDelay = prefs.getInt("undoDelay", 600);
         side.setTranslationY(prefs.getFloat("sideY", 0));
+        side.addOnLayoutChangeListener((v, l1, t1, r1, b1, l2, t2, r2, b2) -> { // folding/unfolding: keep it on screen
+            float lim = Math.max(0, stage.getHeight() / 2f - side.getHeight() / 2f);
+            if (Math.abs(side.getTranslationY()) > lim) side.setTranslationY(Math.signum(side.getTranslationY()) * lim);
+        });
         loadToolPrefs();
         applyTool(canvas.tool);
         gdir = new File(getFilesDir(), "gallery");
@@ -597,7 +617,7 @@ public class MainActivity extends Activity {
     private void newDocument(int w, int h) {
         canvas.docW = w; canvas.docH = h;
         canvas.setDocument(w, h, java.util.Collections.singletonList(canvas.newLayer("Layer 1")));
-        canvas.guide = 0; canvas.editGuide = false; // each new drawing starts without a guide
+        canvas.guide = 0; canvas.editGuide = false; canvas.symRotate = false; // each new drawing starts without a guide
         canvas.guideOpacity = 0.35f; canvas.guideThick = 1.5f; canvas.vpRays = 36; canvas.gridSize = 100; canvas.horizonLevel = true;
         if (bottom != null && canvas.tool != CanvasView.SELECT && canvas.tool != CanvasView.MOVE) bottom.setVisibility(View.GONE);
     }
@@ -682,6 +702,7 @@ public class MainActivity extends Activity {
             chip(a, kinds[i], canvas.selKind == i, v -> { canvas.closePolygon(); canvas.selKind = k; showSelectBar(); });
         }
         chip(b, canvas.selSubtract ? "− Subtract" : "+ Add", canvas.selSubtract, v -> { canvas.selSubtract = !canvas.selSubtract; showSelectBar(); });
+        if (canvas.selKind != 0) chip(b, (canvas.selFill ? "✓ " : "") + "Colour Fill", canvas.selFill, v -> { canvas.selFill = !canvas.selFill; showSelectBar(); });
         chip(b, "Invert", false, v -> canvas.invertSelection());
         chip(b, "Copy & Paste", false, v -> { if (!canvas.copyPaste(false)) full(); });
         chip(b, "Cut & Paste", false, v -> { if (!canvas.copyPaste(true)) full(); });
@@ -882,6 +903,7 @@ public class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.addView(slider("Momentum", Math.round(canvas.liqMomentum * 100), 0, 100, v -> canvas.liqMomentum = v / 100f));
+        box.addView(slider("Distortion", Math.round(canvas.liqDistortion * 100), 0, 100, v -> canvas.liqDistortion = v / 100f));
         TextView sl = new TextView(this);
         sl.setText("Size");
         sl.setTextColor(0xFF9A9A9E);
@@ -1427,6 +1449,12 @@ public class MainActivity extends Activity {
                 chip(sym, sn[i], canvas.guide == g, v -> { canvas.guide = g; canvas.invalidate(); guideEditor(); });
             }
             box.addView(sym);
+            android.widget.Switch rot = new android.widget.Switch(this);
+            rot.setText("Rotational symmetry (off = mirror)  ");
+            rot.setTextColor(Color.WHITE);
+            rot.setChecked(canvas.symRotate);
+            rot.setOnCheckedChangeListener((b, on) -> canvas.symRotate = on);
+            box.addView(rot);
         }
         if (tab != 0) {
             box.addView(slider("Opacity", Math.round(canvas.guideOpacity * 100), 5, 100, v -> { canvas.guideOpacity = v / 100f; canvas.invalidate(); }));
@@ -1503,6 +1531,7 @@ public class MainActivity extends Activity {
         switch (tab) {
             case 0: // Add
                 pop.item("Insert a file", true, () -> action(2, anchor));
+                pop.item("Insert a photo", true, () -> pickPhoto(REQ_IMPORT));
                 pop.item("Take a photo", true, this::takePhoto);
                 pop.item("Open as a new drawing", true, () -> action(1, anchor));
                 pop.item("Add text", true, () -> action(9, anchor));
@@ -1586,6 +1615,8 @@ public class MainActivity extends Activity {
                 pop.toggle("Three-finger swipe down: copy & paste", canvas.gCopy, v -> { canvas.gCopy = v; prefs.edit().putBoolean("gCopy", v).apply(); });
                 pop.toggle("Four-finger tap: full screen", canvas.gFull, v -> { canvas.gFull = v; prefs.edit().putBoolean("gFull", v).apply(); });
                 pop.add(slider("Rapid undo delay (ms)", canvas.undoHoldDelay, 200, 1500, v -> { canvas.undoHoldDelay = v; prefs.edit().putInt("undoDelay", v).apply(); }));
+                pop.section("Selection");
+                pop.add(slider("Selection mask visibility %", Math.round(canvas.selVisibility * 100), 0, 200, v -> { canvas.selVisibility = v / 100f; prefs.edit().putFloat("selVis", canvas.selVisibility).apply(); canvas.invalidate(); }));
                 pop.item("Import brushes", true, () -> action(6, anchor));
                 break;
             default: // Help
@@ -1670,6 +1701,13 @@ public class MainActivity extends Activity {
                         .setPositiveButton("OK", null).show();
                 break;
         }
+    }
+
+    /** Android's photo picker (like Procreate's Photo button); falls back to the file browser on older phones. */
+    private void pickPhoto(int req) {
+        Intent i = new Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).setType("image/*");
+        try { startActivityForResult(i, req); }
+        catch (Exception e) { startActivityForResult(new Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), req); }
     }
 
     private void openDoc(int req) {
@@ -1932,10 +1970,17 @@ public class MainActivity extends Activity {
 
     private FrameLayout studio;
     private int studioTab;
+    private CanvasView.Brush studioBrush; // brush waiting for a shape/grain picture
+    private Runnable studioRedraw;
 
     private void brushStudio(CanvasView.Brush b) {
         float[] before = b.values();
         String beforeName = b.name, beforeSet = b.set;
+        byte[][] beforeTip = b.tip == null ? null : new byte[b.tip.length][];
+        if (beforeTip != null) for (int i = 0; i < b.tip.length; i++) beforeTip[i] = b.tip[i].clone();
+        int[] beforeTw = b.tw, beforeTh = b.th;
+        byte[] beforeTex = b.tex == null ? null : b.tex.clone();
+        int beforeGw = b.gw, beforeGh = b.gh;
         if (studio != null) shell.removeView(studio);
         studio = new FrameLayout(this);
         studio.setBackgroundColor(0xFF111113);
@@ -1951,6 +1996,7 @@ public class MainActivity extends Activity {
         head.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
         chip(head, "Cancel", false, v -> {
             b.setValues(before); b.name = beforeName; b.set = beforeSet;
+            b.tip = beforeTip; b.tw = beforeTw; b.th = beforeTh; b.tex = beforeTex; b.gw = beforeGw; b.gh = beforeGh; // shape/grain too
             previews.remove(b);
             closeStudio();
         });
@@ -2050,6 +2096,31 @@ public class MainActivity extends Activity {
                     public void onStopTrackingTouch(SeekBar s2) { redraw.run(); }
                 });
                 settings.addView(sb, new LinearLayout.LayoutParams(-1, (int) (40 * dp)));
+            }
+            String secName = (String) sec[0][0];
+            if (secName.equals("Shape") || secName.equals("Grain")) { // Shape source / Grain source, like Procreate
+                boolean shape = secName.equals("Shape");
+                LinearLayout src = barRow();
+                chip(src, shape ? "Import shape image…" : "Import grain image…", false, v -> {
+                    studioBrush = b; studioRedraw = () -> { previews.remove(b); show[0].run(); redraw.run(); };
+                    pickPhoto(shape ? REQ_SHAPE : REQ_GRAIN);
+                });
+                chip(src, "Invert", false, v -> {
+                    if (shape && b.tip != null) { for (byte[] lv : b.tip) Brushes.invert(lv); }
+                    else if (!shape) Brushes.invert(b.tex);
+                    previews.remove(b); redraw.run();
+                });
+                chip(src, shape ? "Round tip" : "No grain", false, v -> {
+                    if (shape) { b.tip = null; b.tw = null; b.th = null; } else { b.tex = null; b.grain = 0; }
+                    previews.remove(b); show[0].run(); redraw.run();
+                });
+                HorizontalScrollView hs = new HorizontalScrollView(this);
+                hs.addView(src);
+                settings.addView(hs);
+                TextView note = new TextView(this);
+                note.setText(shape ? "Any picture works: white (or dark marks on paper) becomes paint." : "Any picture works as paper texture: light areas let paint through.");
+                note.setTextColor(0xFF8E8E93);
+                settings.addView(note);
             }
         };
         show[0].run();
@@ -3536,6 +3607,14 @@ public class MainActivity extends Activity {
         if (res != RESULT_OK || data == null || data.getData() == null) return;
         if (req == REQ_EXPORT) export(data.getData(), exportFormat);
         if (req == REQ_FONT) importFont(data.getData());
+        if ((req == REQ_SHAPE || req == REQ_GRAIN) && studioBrush != null) {
+            try (InputStream in = getContentResolver().openInputStream(data.getData())) {
+                byte[] img = Brushes.readAll(in);
+                boolean ok = req == REQ_SHAPE ? Brushes.applyShape(studioBrush, img) : Brushes.applyGrain(studioBrush, img);
+                toast(ok ? (req == REQ_SHAPE ? "Shape set" : "Grain set") : "Couldn't read that picture");
+                if (ok && studioRedraw != null) studioRedraw.run();
+            } catch (Exception e) { toast("Couldn't read that picture"); }
+        }
         if (req == REQ_TREE) exportMany(data.getData(), false);
         if (req == REQ_PDF_MANY) exportMany(data.getData(), true);
         if (req == REQ_PAGES_PDF) exportPages(data.getData());
@@ -3661,7 +3740,7 @@ public class MainActivity extends Activity {
             canvas.bgVisible = Boolean.parseBoolean(v[1]);
         } catch (Exception ignored) { }
         loadExtras();
-        canvas.guide = 0; canvas.editGuide = false;
+        canvas.guide = 0; canvas.editGuide = false; canvas.symRotate = false;
         try { canvas.setGuideState(new String(java.nio.file.Files.readAllBytes(guideFile(curId).toPath()), "UTF-8")); }
         catch (Exception ignored) { }
         canvas.invalidate();
@@ -3749,6 +3828,7 @@ public class MainActivity extends Activity {
                 bp.show(v);
             });
             button(head, "Import", v -> openDoc(REQ_GALLERY));
+            button(head, "Photo", v -> pickPhoto(REQ_GALLERY));
             button(head, "＋ New", this::newMenu);
             col.addView(head, new LinearLayout.LayoutParams(-1, (int) (52 * dp)));
             ScrollView sv = new ScrollView(this);

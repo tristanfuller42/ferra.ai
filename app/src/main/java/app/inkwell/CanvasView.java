@@ -245,6 +245,7 @@ public class CanvasView extends View {
 
         /** Gives the brush a generated tip image: 1 = bristles (oil), 2 = sparse bristles (dry), 3 = sponge. */
         Brush tipKind(int kind) {
+            if (kind >= 4) return tipGen(kind);
             int n = kind == 3 ? 128 : 96;
             float[] f = new float[n * n];
             java.util.Random r = new java.util.Random(kind * 977L);
@@ -258,6 +259,85 @@ public class CanvasView extends View {
                     for (int x = Math.max(0, (int) (cx - rad - 1)); x < Math.min(n, (int) (cx + rad + 2)); x++) {
                         float q = 1 - (float) Math.hypot(x + 0.5f - cx, y + 0.5f - cy) / rad;
                         if (q > 0) f[y * n + x] = Math.max(f[y * n + x], val * Math.min(1, q * 2.5f));
+                    }
+            }
+            byte[] t = new byte[n * n];
+            for (int i = 0; i < t.length; i++) t[i] = (byte) Math.round(Math.min(1, f[i]) * 255);
+            setTip(t, n, n);
+            return this;
+        }
+
+        /** More generated tips: 4 spray speckle, 5 crayon, 6 cloud, 7 grass blades, 8 stipple, 9 streak,
+         *  10 halftone dots, 11 hatching lines, 12 snowflake dots. */
+        Brush tipGen(int kind) {
+            int n = 128;
+            float[] f = new float[n * n];
+            java.util.Random r = new java.util.Random(kind * 7919L);
+            java.util.function.BiConsumer<float[], Float> dot = (c, val) -> { // c = {x, y, radius}
+                for (int y = Math.max(0, (int) (c[1] - c[2] - 1)); y < Math.min(n, (int) (c[1] + c[2] + 2)); y++)
+                    for (int x = Math.max(0, (int) (c[0] - c[2] - 1)); x < Math.min(n, (int) (c[0] + c[2] + 2)); x++) {
+                        float q = 1 - (float) Math.hypot(x + 0.5f - c[0], y + 0.5f - c[1]) / c[2];
+                        if (q > 0) f[y * n + x] = Math.max(f[y * n + x], val * Math.min(1, q * 2f));
+                    }
+            };
+            switch (kind) {
+                case 4: case 12: { // spray / snow: many small dots, denser in the middle
+                    int count = kind == 4 ? 260 : 30;
+                    for (int i = 0; i < count; i++) {
+                        double a = r.nextDouble() * Math.PI * 2, d = Math.abs(r.nextGaussian()) * 0.35;
+                        if (d > 0.95) continue;
+                        float rad = kind == 4 ? 0.8f + r.nextFloat() * 1.6f : 3 + r.nextFloat() * 5;
+                        dot.accept(new float[]{n / 2f + (float) (Math.cos(a) * d * n / 2), n / 2f + (float) (Math.sin(a) * d * n / 2), rad}, 0.6f + 0.4f * r.nextFloat());
+                    }
+                    break;
+                }
+                case 5: { // crayon: a disk with a rough edge and waxy holes (own noise: the shared grain isn't built yet here)
+                    float[] edgeN = new float[64];
+                    for (int i = 0; i < 64; i++) edgeN[i] = r.nextFloat();
+                    for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
+                        float dx = x + 0.5f - n / 2f, dy = y + 0.5f - n / 2f, d = (float) Math.hypot(dx, dy) / (n / 2f);
+                        int ai = (int) ((Math.atan2(dy, dx) + Math.PI) / (2 * Math.PI) * 63.99);
+                        float edge = 0.8f + 0.15f * edgeN[ai];
+                        if (d < edge) f[y * n + x] = r.nextFloat() > 0.28f ? 1f : 0.35f;
+                    }
+                    break;
+                }
+                case 6: // cloud: overlapping soft blobs
+                    for (int i = 0; i < 14; i++) {
+                        double a = r.nextDouble() * Math.PI * 2, d = Math.sqrt(r.nextDouble()) * 0.5;
+                        float rad = 14 + r.nextFloat() * 22;
+                        float cx = n / 2f + (float) (Math.cos(a) * d * n / 2), cy = n / 2f + (float) (Math.sin(a) * d * n / 2);
+                        for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
+                            float q = 1 - (float) Math.hypot(x + 0.5f - cx, y + 0.5f - cy) / rad;
+                            if (q > 0) f[y * n + x] = Math.min(1, f[y * n + x] + q * q * 0.45f);
+                        }
+                    }
+                    break;
+                case 7: // grass: thin blades rising from the bottom, curving
+                    for (int i = 0; i < 9; i++) {
+                        float x0 = n * (0.2f + 0.6f * r.nextFloat()), bend = (r.nextFloat() - 0.5f) * 40, h = n * (0.5f + 0.45f * r.nextFloat());
+                        for (int k = 0; k < 120; k++) {
+                            float t = k / 119f;
+                            dot.accept(new float[]{x0 + bend * t * t, n - 2 - h * t, 2.2f * (1 - t) + 0.4f}, 1f);
+                        }
+                    }
+                    break;
+                case 8: // stipple: scattered dots in a square
+                    for (int i = 0; i < 90; i++) dot.accept(new float[]{8 + r.nextFloat() * (n - 16), 8 + r.nextFloat() * (n - 16), 1.5f + r.nextFloat() * 2}, 1f);
+                    break;
+                case 9: // streak: a thin vertical line (rain, flicks)
+                    for (int k = 0; k < 100; k++) dot.accept(new float[]{n / 2f, 10 + k * (n - 20) / 99f, 2.5f}, 0.5f + 0.5f * (k / 99f));
+                    break;
+                case 10: // halftone: a regular grid of dots
+                    for (int y = 8; y < n; y += 16) for (int x = 8; x < n; x += 16) {
+                        float d = (float) Math.hypot(x - n / 2f, y - n / 2f) / (n / 2f);
+                        if (d < 0.95f) dot.accept(new float[]{x, y, 5}, 1f);
+                    }
+                    break;
+                default: // 11 hatching: parallel diagonal lines
+                    for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
+                        float d = (float) Math.hypot(x + 0.5f - n / 2f, y + 0.5f - n / 2f) / (n / 2f);
+                        if (d < 0.95f && ((x + y) % 12) < 3) f[y * n + x] = 1f;
                     }
             }
             byte[] t = new byte[n * n];
@@ -331,7 +411,44 @@ public class CanvasView extends View {
                 .p("roundness", 0.12f).p("angle", 30),
         new Brush("Sponge",         0.8f,  0.5f,  0.9f, 0.6f, 0.3f,  0.15f).with("Painting", 0f, 0f, 0f)
                 .p("scatter", 0.25f).p("jitterSize", 0.3f).p("jitterOpacity", 0.3f).tipKind(3),
-        new Brush("Blender",        0.6f,  0.2f,  0.6f, 0.2f, 0f,    0.06f).with("Painting", 0.3f, 0.1f, 0.1f)
+        new Brush("Blender",        0.6f,  0.2f,  0.6f, 0.2f, 0f,    0.06f).with("Painting", 0.3f, 0.1f, 0.1f),
+        // Calligraphy
+        new Brush("Chisel",         0.5f,  1f,    1f,   0.95f, 0f,   0.03f).with("Calligraphy", 0.4f, 0f, 0.1f).p("roundness", 0.18f).p("angle", 45),
+        new Brush("Calligraphy pen", 0.3f, 1f,    1f,   0.95f, 0f,   0.03f).with("Calligraphy", 0.45f, 0.1f, 0.2f).p("roundness", 0.12f).p("angle", 30),
+        new Brush("Script",         0.2f,  1f,    1f,   0.9f, 0f,    0.05f).with("Calligraphy", 0.6f, 0.2f, 0.3f),
+        new Brush("Brush lettering", 0.05f, 1f,   1f,   0.85f, 0f,   0.04f).with("Calligraphy", 0.55f, 0.25f, 0.35f).p("curve", 1.4f),
+        new Brush("Monoline",       1f,    1f,    1f,   0.95f, 0f,   0.05f).with("Calligraphy", 0.7f, 0f, 0f).p("motionFilter", 0.4f),
+        // Charcoals
+        new Brush("Willow charcoal", 0.6f, 0.15f, 0.9f, 0.3f, 0.9f,  0.08f).with("Charcoals", 0f, 0f, 0f).tipKind(5).p("tiltSize", 0.8f).p("tiltOpacity", 0.3f),
+        new Brush("Compressed charcoal", 0.6f, 0.3f, 1f, 0.6f, 0.8f, 0.07f).with("Charcoals", 0f, 0f, 0f).tipKind(5).p("grainScale", 1.4f),
+        new Brush("Charcoal block", 0.8f,  0.2f,  0.9f, 0.5f, 0.85f, 0.06f).with("Charcoals", 0f, 0f, 0f).p("roundness", 0.35f).p("follow", 1).p("grainScale", 2f),
+        new Brush("Vine charcoal",  0.7f,  0.05f, 0.7f, 0.3f, 0.9f,  0.08f).with("Charcoals", 0f, 0.1f, 0.1f).tipKind(5).p("tiltSize", 0.6f),
+        // Drawing
+        new Brush("Graphite 2H",    0.8f,  0.1f,  0.55f, 0.7f, 0.65f, 0.1f).with("Drawing", 0.1f, 0f, 0f).p("tiltSize", 0.5f).p("tiltOpacity", 0.3f),
+        new Brush("Graphite 4B",    0.6f,  0.2f,  0.95f, 0.6f, 0.7f, 0.1f).with("Drawing", 0.05f, 0f, 0f).p("tiltSize", 0.8f).p("tiltOpacity", 0.35f),
+        new Brush("Wax crayon",     0.8f,  0.4f,  1f,   0.6f, 0.75f, 0.07f).with("Drawing", 0f, 0f, 0f).tipKind(5).p("grainScale", 2f),
+        new Brush("Conté",          0.7f,  0.3f,  1f,   0.6f, 0.6f,  0.07f).with("Drawing", 0f, 0f, 0f).p("roundness", 0.6f).p("follow", 1),
+        new Brush("Technical pen",  1f,    1f,    1f,   0.95f, 0f,   0.05f).with("Drawing", 0.4f, 0f, 0f),
+        new Brush("Ballpoint",      0.8f,  0.4f,  0.9f, 0.9f, 0.15f, 0.06f).with("Drawing", 0.3f, 0.05f, 0.05f),
+        new Brush("Felt tip",       0.9f,  0.9f,  0.8f, 0.85f, 0f,   0.06f).with("Drawing", 0.25f, 0f, 0f),
+        // Textures
+        new Brush("Stipple",        1f,    1f,    1f,   0.9f, 0f,    0.6f).with("Textures", 0f, 0f, 0f).tipKind(8).p("scatter", 0.3f),
+        new Brush("Halftone",       1f,    1f,    1f,   0.9f, 0f,    0.9f).with("Textures", 0f, 0f, 0f).tipKind(10),
+        new Brush("Crosshatch",     1f,    0.5f,  1f,   0.9f, 0f,    0.7f).with("Textures", 0f, 0f, 0f).tipKind(11),
+        new Brush("Grunge",         0.8f,  0.4f,  0.9f, 0.5f, 0.7f,  0.25f).with("Textures", 0f, 0f, 0f).tipKind(6).p("scatter", 0.3f).p("jitterSize", 0.4f).p("grainScale", 2.5f),
+        new Brush("Paper texture",  1f,    0.2f,  0.6f, 0f,   1f,    0.1f).with("Textures", 0f, 0f, 0f).p("grainScale", 1.5f),
+        // Spray paints
+        new Brush("Spray can",      1f,    0.3f,  0.6f, 0.9f, 0f,    0.2f).with("Spray paints", 0f, 0f, 0f).tipKind(4),
+        new Brush("Splatter",       0.6f,  1f,    1f,   0.9f, 0f,    0.6f).with("Spray paints", 0f, 0f, 0f).tipKind(4).p("scatter", 0.8f).p("jitterSize", 0.6f),
+        new Brush("Fine mist",      1f,    0.05f, 0.25f, 0f,  0.2f,  0.1f).with("Spray paints", 0f, 0f, 0f).p("grainScale", 0.5f),
+        new Brush("Flicks",         0.4f,  0.6f,  1f,   0.9f, 0f,    0.5f).with("Spray paints", 0f, 0f, 0f).tipKind(9).p("follow", 1).p("scatter", 0.4f).p("jitterSize", 0.5f),
+        // Elements
+        new Brush("Clouds",         1f,    0.3f,  0.45f, 0.5f, 0.2f, 0.2f).with("Elements", 0.2f, 0f, 0f).tipKind(6).p("scatter", 0.2f).p("jitterSize", 0.3f).p("jitterOpacity", 0.3f),
+        new Brush("Smoke",          1f,    0.2f,  0.25f, 0.5f, 0f,   0.08f).with("Elements", 0.5f, 0.2f, 0.4f).tipKind(6).p("follow", 1),
+        new Brush("Grass",          0.7f,  1f,    1f,   0.9f, 0f,    0.4f).with("Elements", 0f, 0f, 0f).tipKind(7).p("scatter", 0.15f).p("jitterSize", 0.35f),
+        new Brush("Fur",            0.7f,  0.6f,  0.9f, 0.9f, 0f,    0.2f).with("Elements", 0f, 0f, 0f).tipKind(7).p("follow", 1).p("angle", 90).p("jitterSize", 0.3f),
+        new Brush("Rain",           1f,    0.5f,  0.6f, 0.9f, 0f,    0.7f).with("Elements", 0f, 0f, 0f).tipKind(9).p("scatter", 1f).p("jitterSize", 0.5f),
+        new Brush("Snow",           1f,    1f,    1f,   0.9f, 0f,    0.8f).with("Elements", 0f, 0f, 0f).tipKind(12).p("scatter", 1f).p("jitterSize", 0.5f)
     ));
 
     /** 128x128 tileable paper grain, 0..255. */
@@ -355,7 +472,8 @@ public class CanvasView extends View {
     public static final java.util.HashMap<String, float[]> DEFAULTS = new java.util.HashMap<>();
     static { for (Brush b : BRUSHES) DEFAULTS.put(b.name, b.values()); }
 
-    public static final String[] SETS = {"Inking", "Sketching", "Painting", "Airbrushing", "Imported"};
+    public static final String[] SETS = {"Inking", "Sketching", "Painting", "Airbrushing", "Calligraphy", "Charcoals", "Drawing",
+            "Textures", "Spray paints", "Elements", "Imported"};
 
     public Brush brush = BRUSHES.get(0);
     public float opacity = 1f;
@@ -395,6 +513,7 @@ public class CanvasView extends View {
         return ((int) (255 * Math.min(1f, guideOpacity * mul)) << 24) | 0x3D9BFF;
     }
     public boolean editGuide;
+    public boolean symRotate;           // symmetry copies are rotated (true) or mirrored (false, Procreate's default)
     private int dragVp = -1;
     private float asX, asY, adX, adY;
     private boolean asDir;
@@ -972,18 +1091,20 @@ public class CanvasView extends View {
 
     public Runnable onFrame;
 
+    public float selVisibility = 1f;      // Prefs: how strongly the stripes cover what isn't selected (0..2)
     private android.graphics.BitmapShader hatchShader;
     private boolean hatchStrong;
-    private float hatchScale;
+    private float hatchScale, hatchVis;
 
     /** Diagonal stripes, a fixed size on screen whatever the zoom. */
     private android.graphics.Shader hatch(boolean strong, float viewScale) {
-        if (hatchShader == null || hatchStrong != strong || Math.abs(hatchScale - viewScale) > 0.01f) {
+        if (hatchShader == null || hatchStrong != strong || Math.abs(hatchScale - viewScale) > 0.01f || hatchVis != selVisibility) {
+            hatchVis = selVisibility;
             int t = 16;
             Bitmap tile = Bitmap.createBitmap(t, t, Bitmap.Config.ARGB_8888);
             Canvas tc = new Canvas(tile);
             Paint lp = new Paint(Paint.ANTI_ALIAS_FLAG);
-            lp.setStrokeWidth(3);
+            lp.setStrokeWidth(3 * Math.max(1f, selVisibility)); // above 100%: thicker stripes
             lp.setColor(strong ? 0x993D9BFF : 0x558E8E93);
             for (int k = -1; k <= 1; k++) tc.drawLine(k * t, t, k * t + t, 0, lp);
             hatchShader = new android.graphics.BitmapShader(tile, android.graphics.Shader.TileMode.REPEAT, android.graphics.Shader.TileMode.REPEAT);
@@ -1106,6 +1227,7 @@ public class CanvasView extends View {
         if (selOverlay != null) { // diagonal hatching over what is NOT selected (stronger while selecting)
             Paint o = new Paint(Paint.FILTER_BITMAP_FLAG);
             o.setShader(hatch(tool == SELECT, sc));
+            o.setAlpha(Math.round(255 * Math.min(1f, selVisibility)));
             c.drawBitmap(selOverlay, 0, 0, o);
         }
         drawAnts(c, sc);
@@ -1114,6 +1236,11 @@ public class CanvasView extends View {
                 Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
                 dot.setColor(0xFF3D9BFF);
                 c.drawCircle(polyX0, polyY0, 8 / sc, dot);
+            }
+            if (selFill && !selSubtract) { // Colour Fill preview while drawing the shape
+                Paint fp = new Paint(Paint.ANTI_ALIAS_FLAG);
+                fp.setColor(0x99000000 | grey * 0x10101);
+                c.drawPath(selPath, fp);
             }
             g.setColor(0xFF3D9BFF);
             g.setStrokeWidth(2f / sc);
@@ -1950,7 +2077,7 @@ public class CanvasView extends View {
         sb.append(guide).append(',').append(gridSize).append(',').append(as).append(',')
           .append(guideOpacity).append(',').append(guideThick).append(',').append(vpRays);
         for (float v : vp) sb.append(',').append(v);
-        sb.append(',').append(horizonLevel);
+        sb.append(',').append(horizonLevel).append(',').append(symRotate);
         return sb.toString();
     }
 
@@ -1963,6 +2090,7 @@ public class CanvasView extends View {
             guideOpacity = Float.parseFloat(v[3]); guideThick = Float.parseFloat(v[4]); vpRays = Integer.parseInt(v[5]);
             for (int i = 0; i < 6; i++) vp[i] = Float.parseFloat(v[6 + i]);
             horizonLevel = v.length <= 12 || Boolean.parseBoolean(v[12]);
+            symRotate = v.length <= 13 ? guide == 5 : Boolean.parseBoolean(v[13]); // older drawings: as before
         } catch (Exception ignored) { }
         invalidate();
     }
@@ -2111,16 +2239,26 @@ public class CanvasView extends View {
     private void stamp(float cx, float cy, float p) {
         stampOne(cx, cy, p);
         if (smudging || guide < 2 || guide > 5) return;
-        float mx = docW - cx, my = docH - cy;
+        float mx = docW - cx, my = docH - cy, ox = cx - docW / 2f, oy = cy - docH / 2f, hx = docW / 2f, hy = docH / 2f;
+        if (symRotate) { // rotational symmetry: copies are turned around the centre instead of mirrored
+            if (guide == 2 || guide == 3) stampOne(mx, my, p);                       // 180°
+            else if (guide == 4) { stampOne(hx - oy, hy + ox, p); stampOne(mx, my, p); stampOne(hx + oy, hy - ox, p); } // 90° steps
+            else for (int k = 1; k < 8; k++) {                                       // radial: 8 turned copies
+                double a = Math.PI * k / 4;
+                float c = (float) Math.cos(a), s = (float) Math.sin(a);
+                stampOne(hx + ox * c - oy * s, hy + ox * s + oy * c, p);
+            }
+            return;
+        }
         if (guide == 2) stampOne(mx, cy, p);
         else if (guide == 3) stampOne(cx, my, p);
         else if (guide == 4) { stampOne(mx, cy, p); stampOne(cx, my, p); stampOne(mx, my, p); }
-        else if (guide == 5) {
-            float ox = cx - docW / 2f, oy = cy - docH / 2f;
-            for (int k = 1; k < 8; k++) {
-                double a = Math.PI * k / 4;
+        else if (guide == 5) { // radial mirror: 8 segments, every other one mirrored (kaleidoscope)
+            for (int k = 0; k < 4; k++) {
+                double a = Math.PI * k / 2;
                 float c = (float) Math.cos(a), s = (float) Math.sin(a);
-                stampOne(docW / 2f + ox * c - oy * s, docH / 2f + ox * s + oy * c, p);
+                if (k > 0) stampOne(hx + ox * c - oy * s, hy + ox * s + oy * c, p);
+                stampOne(hx - ox * c - oy * s, hy - ox * s + oy * c, p); // the mirror of that turn
             }
         }
     }
@@ -2894,7 +3032,26 @@ public class CanvasView extends View {
         byte[] m = a8ToBytes(b);
         b.recycle();
         selPath = null;
+        shapeSelected(m);
+    }
+
+    public boolean selFill; // Colour Fill: a freehand/polygon/rectangle/ellipse selection is also filled with the ink grey
+
+    /** A drawn selection shape is finished: add it to the selection, and fill it when Colour Fill is on. */
+    private void shapeSelected(byte[] m) {
         combineSel(m);
+        if (!selFill || selSubtract || isLocked()) return;
+        named("Colour fill");
+        Layer l = tgt();
+        int[] px = new int[docW * docH];
+        l.bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
+        push(new PixelEdit(l, new Rect(0, 0, docW, docH)));
+        byte[] keep = sel;
+        sel = null; // fill exactly the drawn shape
+        fillWith(px, m);
+        sel = keep;
+        l.bmp.setPixels(px, 0, docW, 0, 0, docW, docH);
+        afterHistory();
     }
 
     /** Automatic selection: redo the last one with a new threshold. */
@@ -2978,7 +3135,7 @@ public class CanvasView extends View {
                     b.recycle();
                 }
                 selPath = null;
-                combineSel(m);
+                if (selKind == 0) combineSel(m); else shapeSelected(m);
                 break;
             }
             case MotionEvent.ACTION_CANCEL: selPath = null; invalidate(); break;
@@ -3316,6 +3473,8 @@ public class CanvasView extends View {
     public float liqMomentum;           // 0..1: keeps going after you lift
     private float liqLastDx, liqLastDy;
     public float liqSize = 120, liqStrength = 0.5f;
+    public float liqDistortion;          // 0..1: adds turbulence to the warp (Procreate's Distortion)
+    private int liqNoise;
     private int[] liqSrc;
     private float[] fdx, fdy;
     private int gw, gh;
@@ -3397,6 +3556,7 @@ public class CanvasView extends View {
 
     private void liquifyAt(float cx, float cy, float dx, float dy, float k) {
         float R = liqSize, st = liqStrength * k;
+        liqNoise++;
         int gx0 = Math.max(0, (int) ((cx - R) / G)), gx1 = Math.min(gw - 1, (int) ((cx + R) / G) + 1);
         int gy0 = Math.max(0, (int) ((cy - R) / G)), gy1 = Math.min(gh - 1, (int) ((cy + R) / G) + 1);
         for (int gy = gy0; gy <= gy1; gy++)
@@ -3430,6 +3590,13 @@ public class CanvasView extends View {
                         break;
                     }
                     default: fdx[i] *= 1 - 0.25f * w * Math.max(0.2f, st); fdy[i] *= 1 - 0.25f * w * Math.max(0.2f, st);
+                }
+                if (liqDistortion > 0 && liqMode != 5) { // turbulence: a wobbly, uneven push
+                    int hsh = (gx * 73856093) ^ (gy * 19349663) ^ (liqNoise * 83492791);
+                    hsh ^= hsh >>> 13; hsh *= 0x5bd1e995; hsh ^= hsh >>> 15;
+                    float rx = ((hsh & 1023) / 1023f - 0.5f), ry = (((hsh >> 10) & 1023) / 1023f - 0.5f);
+                    float amp = liqDistortion * w * Math.max(0.2f, st) * G * 0.9f;
+                    fdx[i] += rx * amp; fdy[i] += ry * amp;
                 }
             }
         Rect r = new Rect((int) (cx - R) - 2, (int) (cy - R) - 2, (int) (cx + R) + 3, (int) (cy + R) + 3);
