@@ -2788,6 +2788,7 @@ public class CanvasView extends View {
         finishShapeEdit();
         if (!moving) return;
         moving = false;
+        boolean untouched = moveT.isIdentity() && poly.isIdentity() && xform != 3; // opened and left as is
         xfUndo.clear(); xfRedo.clear();
         Layer l = tgt();
         Matrix m = transformMatrix();
@@ -2816,6 +2817,8 @@ public class CanvasView extends View {
                         pe.bytes() + sb.length + sa.length));
             }
         }
+        if (untouched && !undoList.isEmpty() && undoList.get(undoList.size() - 1) == moveEdit)
+            undoList.remove(undoList.size() - 1); // nothing changed: no empty "Transform" undo step
         moveEdit = null;
         selBeforeMove = null;
         moveT.reset();

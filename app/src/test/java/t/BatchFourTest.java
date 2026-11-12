@@ -526,4 +526,16 @@ public class BatchFourTest extends Base {
         ((android.widget.PopupWindow) get(pop, "win")).dismiss();
         assertEquals("next time it is first", "Charcoal", ((CanvasView.Brush) ((List<?>) call(act, "recentBrushes")).get(0)).name);
     }
+
+    @Test public void transform_shows_box_and_lever_right_away() {
+        pen(new float[][]{{W * .35f, H * .45f}, {W * .65f, H * .5f}});
+        int undoSteps = ((List<?>) get(cv, "undoList")).size();
+        call(act, "setTool", CanvasView.MOVE); settle();
+        assertTrue("box shows without touching", (Boolean) get(cv, "moving"));
+        assertNotNull("rotation lever shows", call(cv, "rotHandle"));
+        call(act, "setTool", CanvasView.DRAW);
+        assertEquals("no empty Transform undo step", undoSteps, ((List<?>) get(cv, "undoList")).size());
+        cv.undo();
+        assertEquals("undo still takes back the stroke", 0, inkSum(L()));
+    }
 }

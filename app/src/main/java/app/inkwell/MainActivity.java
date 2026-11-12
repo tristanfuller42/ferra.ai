@@ -654,7 +654,7 @@ public class MainActivity extends Activity {
         adjustBtn.setOn(t == CanvasView.ADJUST || t == CanvasView.LIQUIFY || t == CanvasView.CLONE);
         if (bottom == null) return; // still building the screen
         if (t == CanvasView.SELECT) showSelectBar();
-        else if (t == CanvasView.MOVE) showTransformBar();
+        else if (t == CanvasView.MOVE) { canvas.beginMove(); showTransformBar(); } // box, handles and rotation lever show straight away
         else if (t != CanvasView.ADJUST && t != CanvasView.LIQUIFY && t != CanvasView.CLONE) bottom.setVisibility(View.GONE);
     }
 
