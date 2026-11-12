@@ -330,6 +330,7 @@ public class MainActivity extends Activity {
         tlOn = prefs.getBoolean("timelapse", true);
         canvas.fingerMode = prefs.getInt("fingerMode", prefs.getBoolean("fingerPaint", false) ? 1 : 2);
         canvas.holdAction = prefs.getInt("holdAction", 0);
+        canvas.onionTint = prefs.getBoolean("onionTint", true);
         canvas.selVisibility = prefs.getFloat("selVis", 1f);
         canvas.holdDelay = prefs.getInt("holdDelay", 450);
         canvas.gUndo = prefs.getBoolean("gUndo", true); canvas.gRedo = prefs.getBoolean("gRedo", true);
@@ -775,21 +776,53 @@ public class MainActivity extends Activity {
             new Adj("Brightness / Contrast", new String[]{"Brightness", "Contrast"}, new float[]{-1, -0.95f}, new float[]{1, 0.95f}, new float[]{0, 0},
                     v -> (s, o) -> Fx.lut(s, o, Fx.brightnessContrast(v[0], v[1]))),
             new Adj("Curves", new String[0], new float[0], new float[0], new float[0],
-                    v -> { float[][] c = curveView.arrays(); int[] l = Fx.curve(c[0], c[1]); return (s, o) -> Fx.lut(s, o, l); }),
+                    v -> { int[][] l = curveView.luts(); return (s, o) -> Fx.lut4(s, o, l[0], l[1], l[2], l[3]); }),
             new Adj("Threshold", new String[]{"Level"}, new float[]{1}, new float[]{254}, new float[]{128},
                     v -> (s, o) -> Fx.thresholdLum(s, o, Math.round(v[0]))),
             new Adj("Hue, Saturation, Brightness", new String[]{"Hue", "Saturation", "Brightness"}, new float[]{-180, -1, -1}, new float[]{180, 1, 1}, new float[]{0, 0, 0},
                     v -> (s, o) -> Fx.hsb(s, o, v[0], v[1], v[2])),
             new Adj("Colour Balance", new String[]{"Cyan ↔ Red", "Magenta ↔ Green", "Yellow ↔ Blue"}, new float[]{-1, -1, -1}, new float[]{1, 1, 1}, new float[]{0, 0, 0},
                     v -> (s, o) -> Fx.colorBalance(s, o, v[0], v[1], v[2])),
-            new Adj("Gradient Map", new String[]{"Amount (dark = your colour, light = paper)"}, new float[]{0}, new float[]{1}, new float[]{1},
-                    v -> { int ca = canvas.color, cb = canvas.paperColor(); float k = v[0];
-                        return (s, o) -> { Fx.gradientMap(s, o, ca, cb); for (int i = 0; i < s.length; i++) o[i] = mixPx(s[i], o[i], k); }; }),
+            new Adj("Gradient Map", new String[]{"Amount"}, new float[]{0}, new float[]{1}, new float[]{1},
+                    v -> { int[] stops = gradStops().clone(); float k = v[0];
+                        return (s, o) -> { Fx.gradientMapStops(s, o, stops); for (int i = 0; i < s.length; i++) o[i] = mixPx(s[i], o[i], k); }; }),
+            new Adj("Recolor", new String[]{"Tolerance"}, new float[]{0}, new float[]{1}, new float[]{0.25f},
+                    v -> { int target = recolorFrom, to = canvas.color; float t = v[0];
+                        return (s, o) -> { if (target == 0) System.arraycopy(s, 0, o, 0, s.length); else Fx.recolor(s, o, target, to, t); }; }),
             new Adj("Posterize", new String[]{"Levels", "Threshold"}, new float[]{2, -0.5f}, new float[]{32, 0.5f}, new float[]{4, 0},
                     v -> (s, o) -> Fx.lut(s, o, Fx.posterize(Math.round(v[0]), v[1]))),
             new Adj("Invert", new String[0], new float[0], new float[0], new float[0],
                     v -> (s, o) -> Fx.lut(s, o, Fx.invert())),
         };
+    }
+
+    private int recolorFrom; // colour picked on the canvas for Recolor (0 = none yet)
+
+    /** Gradient Map presets (dark → light), like Procreate's library; "Your colours" uses the ink and paper colours. */
+    static final String[] GRAD_NAMES = {"Your colours", "Noir", "Sepia", "Sunset", "Ocean", "Forest", "Neon", "Thermal", "Golden hour", "Duotone", "Custom"};
+    static final int[][] GRADS = {null,
+            {0xFF000000, 0xFF555555, 0xFFFFFFFF},
+            {0xFF2B1A0E, 0xFF8B5A2B, 0xFFE8D3A9, 0xFFFFF7E6},
+            {0xFF2D0B3A, 0xFFB0305C, 0xFFF46036, 0xFFFFD166},
+            {0xFF011627, 0xFF0B4F6C, 0xFF20A4F3, 0xFFC5F2FF},
+            {0xFF0B1F0E, 0xFF2D6A4F, 0xFF95D5B2, 0xFFF1FAEE},
+            {0xFF10002B, 0xFF7B2CBF, 0xFFFF00C8, 0xFF00F5FF},
+            {0xFF000004, 0xFF57106E, 0xFFBC3754, 0xFFF98E09, 0xFFFCFFA4},
+            {0xFF3D1E00, 0xFFB5651D, 0xFFF2A65A, 0xFFFFF0C2},
+            {0xFF1E1B4B, 0xFFF9A8D4},
+            null};
+
+    /** The selected gradient's colours. "Custom" is editable and remembered. */
+    int[] gradStops() {
+        int g = prefs.getInt("gradMap", 0);
+        if (g == 0) return new int[]{0xFF000000 | canvas.color, canvas.paperColor()};
+        if (g == GRAD_NAMES.length - 1) {
+            String[] f = prefs.getString("gradCustom", "#000000,#FF6B6B,#FFFFFF").split(",");
+            int[] r = new int[f.length];
+            for (int i = 0; i < f.length; i++) try { r[i] = Color.parseColor(f[i]); } catch (Exception e) { r[i] = Color.BLACK; }
+            return r;
+        }
+        return GRADS[g];
     }
 
     /** Blend between two pixels by k (0..1). */
@@ -807,7 +840,7 @@ public class MainActivity extends Activity {
         Ui.Pop pop = new Ui.Pop(this, 280);
         pop.title("Adjustments");
         String[][] groups = {
-                {"Colour", "Hue, Saturation, Brightness", "Colour Balance", "Gradient Map"},
+                {"Colour", "Hue, Saturation, Brightness", "Colour Balance", "Gradient Map", "Recolor"},
                 {"Tone", "Brightness / Contrast", "Curves", "Threshold", "Posterize", "Invert"},
                 {"Blur", "Gaussian Blur", "Motion Blur", "Perspective Blur"},
                 {"Effects", "Noise", "Sharpen", "Bloom", "Glitch", "Halftone"},
@@ -865,15 +898,28 @@ public class MainActivity extends Activity {
         if (a.name.equals("Curves")) {
             curveView = new Ui.CurveView(this);
             curveView.listener = () -> canvas.previewAdjust(a.fn.apply(adjVals));
-            int[] hist = new int[256]; // the layer's greys, shown behind the curve
+            int[][] hists = new int[4][256]; // brightness, red, green, blue of the layer, shown behind the curve
             Bitmap lb = canvas.cur().bmp;
             int step = Math.max(1, (int) Math.sqrt((double) lb.getWidth() * lb.getHeight() / 250000));
             int[] row = new int[lb.getWidth()];
             for (int y = 0; y < lb.getHeight(); y += step) {
                 lb.getPixels(row, 0, lb.getWidth(), 0, y, lb.getWidth(), 1);
-                for (int x = 0; x < row.length; x += step) if ((row[x] >>> 24) > 20) hist[row[x] & 255]++;
+                for (int x = 0; x < row.length; x += step) {
+                    int q = row[x];
+                    if ((q >>> 24) <= 20) continue;
+                    hists[0][Fx.lum(q)]++; hists[1][(q >> 16) & 255]++; hists[2][(q >> 8) & 255]++; hists[3][q & 255]++;
+                }
             }
-            curveView.hist = hist;
+            curveView.hists = hists;
+            curveView.hist = hists[0];
+            LinearLayout chs = barRow(); // which channel the curve edits, like Procreate's Curves
+            TextView[] cht = new TextView[4];
+            String[] chn = {"All", "Red", "Green", "Blue"};
+            for (int k = 0; k < 4; k++) {
+                int kk = k;
+                cht[k] = chip(chs, chn[k], k == 0, v -> { curveView.setChannel(kk); for (int j = 0; j < 4; j++) cht[j].setBackgroundColor(j == kk ? Ui.ACCENT : 0); });
+            }
+            box.addView(chs);
             int side = (int) Math.min(300 * dp, getResources().getDisplayMetrics().widthPixels - 48 * dp);
             box.addView(curveView, new LinearLayout.LayoutParams(side, (int) (side * 0.8f)));
             TextView tip = new TextView(this);
@@ -881,6 +927,55 @@ public class MainActivity extends Activity {
             tip.setTextColor(0xFF8E8E93);
             tip.setTextSize(12);
             box.addView(tip);
+        }
+        if (a.name.equals("Gradient Map")) { // presets, and the stops of the chosen one (tap a stop to change it: saved as Custom)
+            LinearLayout gl = barRow();
+            TextView[] gt = new TextView[GRAD_NAMES.length];
+            LinearLayout stopsRow = barRow();
+            Runnable[] drawStops = new Runnable[1];
+            for (int k = 0; k < GRAD_NAMES.length; k++) {
+                int kk = k;
+                gt[k] = chip(gl, GRAD_NAMES[k], prefs.getInt("gradMap", 0) == k, v -> {
+                    prefs.edit().putInt("gradMap", kk).apply();
+                    for (int j = 0; j < gt.length; j++) gt[j].setBackgroundColor(j == kk ? Ui.ACCENT : 0);
+                    drawStops[0].run();
+                    canvas.previewAdjust(a.fn.apply(adjVals));
+                });
+            }
+            HorizontalScrollView gs = new HorizontalScrollView(this);
+            gs.setHorizontalScrollBarEnabled(false);
+            gs.addView(gl);
+            box.addView(gs);
+            drawStops[0] = () -> {
+                stopsRow.removeAllViews();
+                int[] st = gradStops();
+                View bar = new View(this);
+                bar.setBackground(new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT, st));
+                stopsRow.addView(bar, new LinearLayout.LayoutParams((int) (140 * dp), (int) (24 * dp)));
+                for (int i = 0; i < st.length; i++) {
+                    int ii = i;
+                    View sw = new View(this);
+                    android.graphics.drawable.GradientDrawable dd = new android.graphics.drawable.GradientDrawable();
+                    dd.setColor(st[i]); dd.setCornerRadius(5 * dp); dd.setStroke(1, 0xFF8E8E93);
+                    sw.setBackground(dd);
+                    sw.setOnClickListener(v -> colorPanel().show(v, st[ii], c -> {
+                        int[] ns = gradStops().clone();
+                        ns[ii] = 0xFF000000 | c;
+                        StringBuilder sb = new StringBuilder();
+                        for (int j = 0; j < ns.length; j++) sb.append(j > 0 ? "," : "").append(String.format("#%06X", ns[j] & 0xFFFFFF));
+                        prefs.edit().putString("gradCustom", sb.toString()).putInt("gradMap", GRAD_NAMES.length - 1).apply();
+                        for (int j = 0; j < gt.length; j++) gt[j].setBackgroundColor(j == GRAD_NAMES.length - 1 ? Ui.ACCENT : 0);
+                        dd.setColor(0xFF000000 | c);
+                        canvas.previewAdjust(a.fn.apply(adjVals));
+                    }));
+                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (26 * dp), (int) (26 * dp));
+                    lp.leftMargin = (int) (6 * dp);
+                    stopsRow.addView(sw, lp);
+                }
+            };
+            drawStops[0].run();
+            stopsRow.setPadding(0, (int) (4 * dp), 0, (int) (6 * dp));
+            box.addView(stopsRow);
         }
         LinearLayout btns = barRow();
         chip(btns, "Reset", false, v -> {
@@ -905,7 +1000,15 @@ public class MainActivity extends Activity {
         dragStart = -1;
         canvas.onAdjustTap = (x, y) -> {
             if (a.name.startsWith("Perspective")) { zoomCX = x; zoomCY = y; canvas.previewAdjust(a.fn.apply(adjVals)); }
+            if (a.name.equals("Recolor")) { // tap the colour to replace with your current colour
+                int px = canvas.adjSourceAt(x, y);
+                if ((px >>> 24) == 0) { hud("That spot is empty: tap some colour"); return; }
+                recolorFrom = 0xFF000000 | px;
+                hud("Recoloring this colour · slide to change the tolerance");
+                canvas.previewAdjust(a.fn.apply(adjVals));
+            }
         };
+        if (a.name.equals("Recolor")) { recolorFrom = 0; hud("Tap the colour you want to replace with your current colour"); }
         canvas.previewAdjust(a.fn.apply(adjVals));
     }
 
@@ -1281,6 +1384,22 @@ public class MainActivity extends Activity {
         android.widget.CheckBox bold = new android.widget.CheckBox(this);
         bold.setText("Bold");
         bold.setChecked(cur != null && cur.bold);
+        int[] txtColor = {cur != null ? cur.color : canvas.color};
+        LinearLayout colRow = barRow(); // text colour: tap to change it with the colour panel
+        TextView cl = new TextView(this);
+        cl.setText("Colour  ");
+        cl.setTextColor(0xFFE8E8E8);
+        colRow.addView(cl);
+        View csw = new View(this);
+        android.graphics.drawable.GradientDrawable cd = new android.graphics.drawable.GradientDrawable();
+        cd.setColor(0xFF000000 | txtColor[0]);
+        cd.setCornerRadius(6 * dp);
+        cd.setStroke((int) (1.5f * dp), 0xFF8E8E93);
+        csw.setBackground(cd);
+        csw.setContentDescription("Text colour");
+        csw.setOnClickListener(v -> colorPanel().show(v, txtColor[0], c -> { txtColor[0] = c; cd.setColor(0xFF000000 | c); }));
+        colRow.addView(csw, new LinearLayout.LayoutParams((int) (56 * dp), (int) (30 * dp)));
+        box.addView(colRow);
         LinearLayout styles = barRow();
         styles.addView(bold);
         android.widget.CheckBox under = new android.widget.CheckBox(this), outl = new android.widget.CheckBox(this);
@@ -1312,7 +1431,7 @@ public class MainActivity extends Activity {
                     String t = et.getText().toString();
                     if (t.trim().isEmpty()) return;
                     CanvasView.TextInfo ti = new CanvasView.TextInfo(t, Math.max(8, sb.getProgress()), bold.isChecked(), align[0], fontIds.get(font[0]),
-                            cur != null ? cur.color : canvas.color);
+                            txtColor[0]);
                     ti.spacing = sp.getProgress() / 100f - 0.1f;
                     ti.lineSpacing = 0.6f + ls.getProgress() / 100f;
                     ti.underline = under.isChecked();
@@ -2109,6 +2228,11 @@ public class MainActivity extends Activity {
                 {"blend", "Blend mode", 0f, 5f, "choice:Normal|Multiply|Darken|Lighten|Screen|Overlay"},
                 {"pattern", "Halftone grid (dots fixed to the canvas)", 0f, 1f, "choice:Off|On"},
                 {"patternScale", "Halftone spacing", 3f, 60f, "px"}, {"patternDot", "Halftone dot size", 0.1f, 0.7f, "%"}},
+        {{"Colour"}, {"hueJitter", "Hue jitter (each dab)", 0f, 1f, "%"}, {"satJitter", "Saturation jitter (each dab)", 0f, 1f, "%"},
+                {"briJitter", "Brightness jitter (each dab)", 0f, 1f, "%"},
+                {"strokeHue", "Hue jitter (each stroke)", 0f, 1f, "%"}, {"strokeSat", "Saturation jitter (each stroke)", 0f, 1f, "%"},
+                {"strokeBri", "Brightness jitter (each stroke)", 0f, 1f, "%"},
+                {"pressureHue", "Pressure → hue shift", 0f, 1f, "%"}, {"pressureBri", "Pressure → darker", 0f, 1f, "%"}},
         {{"Properties"}, {"sizeScale", "Maximum size", 0.1f, 3f, "×"}, {"alpha", "Maximum opacity", 0.05f, 1f, "%"}},
         {{"About this brush"}},
     };
@@ -2609,7 +2733,7 @@ public class MainActivity extends Activity {
             name.setPadding((int) (8 * dp), 0, 0, 0);
             r.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
             TextView bl = new TextView(this);
-            bl.setText(CanvasView.BLEND_NAMES[l.blend].substring(0, 1));
+            bl.setText(CanvasView.BLEND_SHORT[l.blend]);
             bl.setTextColor(l.blend == 0 ? 0xFF9A9A9E : Ui.ACCENT);
             bl.setPadding((int) (8 * dp), (int) (8 * dp), (int) (4 * dp), (int) (8 * dp));
             bl.setOnClickListener(v -> blendMenu(v, idx));
@@ -3265,6 +3389,10 @@ public class MainActivity extends Activity {
         bgc.setText("First layer is a background (shown on every frame)");
         bgc.setChecked(canvas.animBackground);
         box.addView(bgc);
+        android.widget.CheckBox tint = new android.widget.CheckBox(this);
+        tint.setText("Onion skin colours (earlier frames red, later green)");
+        tint.setChecked(canvas.onionTint);
+        box.addView(tint);
         Runnable upd = () -> {
             fl.setText("Frames per second: " + (fps.getProgress() + 1));
             ol.setText("Onion skin frames: " + on.getProgress());
@@ -3279,6 +3407,8 @@ public class MainActivity extends Activity {
                     canvas.onion = on.getProgress();
                     canvas.onionOpacity = op.getProgress() / 100f;
                     canvas.animBackground = bgc.isChecked();
+                    canvas.onionTint = tint.isChecked();
+                    prefs.edit().putBoolean("onionTint", tint.isChecked()).apply();
                     animMode = mode[0];
                     canvas.invalidate();
                     refreshTimeline();

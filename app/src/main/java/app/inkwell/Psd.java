@@ -20,7 +20,8 @@ import java.util.List;
 /** Minimal Photoshop (.psd) reader/writer: 8-bit RGB or greyscale, layers, masks, groups, RLE. */
 final class Psd {
     /** PSD blend keys in CanvasView.BLEND_NAMES order. */
-    static final String[] KEYS = {"norm", "mul ", "scrn", "over", "dark", "lite", "idiv", "div ", "hLit", "sLit", "diff", "lddg"};
+    static final String[] KEYS = {"norm", "mul ", "scrn", "over", "dark", "lite", "idiv", "div ", "hLit", "sLit", "diff", "lddg",
+            "hue ", "sat ", "colr", "lum ", "smud"};
 
     static final class Doc {
         int w, h;

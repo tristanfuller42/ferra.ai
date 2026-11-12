@@ -135,27 +135,43 @@ final class Ui {
      * (they can't pass their neighbours), double-tap a point or drag it off the graph to remove it.
      */
     static final class CurveView extends View {
-        final java.util.ArrayList<float[]> pts = new java.util.ArrayList<>();
+        /** Points per channel: 0 = all (composite), 1 red, 2 green, 3 blue. */
+        @SuppressWarnings("unchecked")
+        final java.util.ArrayList<float[]>[] chans = new java.util.ArrayList[]{new java.util.ArrayList<>(), new java.util.ArrayList<>(), new java.util.ArrayList<>(), new java.util.ArrayList<>()};
+        java.util.ArrayList<float[]> pts = chans[0];
+        int channel;
+        static final int[] CH_COLOR = {Color.WHITE, 0xFFFF453A, 0xFF32D74B, 0xFF0A84FF};
         Runnable listener;
         int[] hist; // 256 bins of the layer's brightness, drawn faintly behind the curve
+        int[][] hists; // per channel (brightness, red, green, blue), if known
         private int drag = -1, lastTapped = -1;
         private long lastTap;
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         CurveView(Context c) { super(c); reset(); }
 
+        /** Resets every channel to a straight line. */
         void reset() {
-            pts.clear();
-            pts.add(new float[]{0, 0});
-            pts.add(new float[]{1, 1});
+            for (java.util.ArrayList<float[]> l : chans) { l.clear(); l.add(new float[]{0, 0}); l.add(new float[]{1, 1}); }
             invalidate();
         }
 
-        float[][] arrays() {
-            pts.sort((a, b) -> Float.compare(a[0], b[0]));
-            float[] xs = new float[pts.size()], ys = new float[pts.size()];
-            for (int i = 0; i < xs.length; i++) { xs[i] = pts.get(i)[0]; ys[i] = pts.get(i)[1]; }
+        void setChannel(int k) { channel = k; pts = chans[k]; drag = -1; if (hists != null) hist = hists[k]; invalidate(); }
+
+        float[][] arrays() { return arrays(pts); }
+
+        static float[][] arrays(java.util.ArrayList<float[]> l) {
+            l.sort((a, b) -> Float.compare(a[0], b[0]));
+            float[] xs = new float[l.size()], ys = new float[l.size()];
+            for (int i = 0; i < xs.length; i++) { xs[i] = l.get(i)[0]; ys[i] = l.get(i)[1]; }
             return new float[][]{xs, ys};
+        }
+
+        /** Lookup tables for all four channels. */
+        int[][] luts() {
+            int[][] r = new int[4][];
+            for (int k = 0; k < 4; k++) { float[][] a = arrays(chans[k]); r[k] = Fx.curve(a[0], a[1]); }
+            return r;
         }
 
         /** Inset so the end points are fully visible. */
@@ -185,6 +201,16 @@ final class Ui {
             for (int i = 1; i < 4; i++) { c.drawLine(w * i / 4, 0, w * i / 4, h, p); c.drawLine(0, h * i / 4, w, h * i / 4, p); }
             p.setColor(0xFF636366);
             c.drawLine(0, h, w, 0, p); // the "no change" line
+            for (int k = 0; k < 4; k++) { // the other channels' curves, faintly
+                if (k == channel || chans[k].size() <= 2 && chans[k].get(0)[1] == 0 && chans[k].get(chans[k].size() - 1)[1] == 1) continue;
+                float[][] o = arrays(chans[k]);
+                int[] ol = Fx.curve(o[0], o[1]);
+                Path op = new Path();
+                for (int i = 0; i < 256; i++) { float x = w * i / 255f, y = h - h * ol[i] / 255f; if (i == 0) op.moveTo(x, y); else op.lineTo(x, y); }
+                p.setStrokeWidth(1.5f * d);
+                p.setColor((CH_COLOR[k] & 0x00FFFFFF) | 0x88000000);
+                c.drawPath(op, p);
+            }
             float[][] a = arrays();
             int[] lut = Fx.curve(a[0], a[1]);
             Path path = new Path();
@@ -193,7 +219,7 @@ final class Ui {
                 if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
             }
             p.setStrokeWidth(2.5f * d);
-            p.setColor(Color.WHITE);
+            p.setColor(CH_COLOR[channel]);
             c.drawPath(path, p);
             for (int i = 0; i < pts.size(); i++) {
                 float[] q = pts.get(i);

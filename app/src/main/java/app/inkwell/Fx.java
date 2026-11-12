@@ -26,6 +26,14 @@ final class Fx {
         }
     }
 
+    /** Curves with separate tables: all channels (c), then red, green and blue. */
+    static void lut4(int[] s, int[] d, int[] c, int[] r, int[] g, int[] b) {
+        for (int i = 0; i < s.length; i++) {
+            int p = s[i];
+            d[i] = (p & 0xFF000000) | (r[c[(p >> 16) & 255]] << 16) | (g[c[(p >> 8) & 255]] << 8) | b[c[p & 255]];
+        }
+    }
+
     /** Threshold on brightness: black or white. */
     static void thresholdLum(int[] s, int[] d, int level) {
         for (int i = 0; i < s.length; i++) d[i] = (s[i] & 0xFF000000) | (lum(s[i]) >= level ? 0xFFFFFF : 0);
@@ -103,6 +111,45 @@ final class Fx {
             float l = lum(p) / 255f, mid = 1 - Math.abs(l - 0.5f) * 1.4f; // most effect in the mid-tones
             float k = 90 * Math.max(0.2f, mid);
             d[i] = pix(p >>> 24, Math.round(red(p) + cr * k), Math.round(green(p) + mg * k), Math.round(blue(p) + yb * k));
+        }
+    }
+
+    /** Gradient map through several colours, evenly spaced from dark to light. */
+    static void gradientMapStops(int[] s, int[] d, int[] stops) {
+        int n = stops.length - 1;
+        int[] lut = new int[256];
+        for (int l = 0; l < 256; l++) {
+            float t = l / 255f * n;
+            int k = Math.min(n - 1, (int) t);
+            float f = t - k;
+            int a = stops[k], b = stops[k + 1];
+            lut[l] = ((Math.round(red(a) + (red(b) - red(a)) * f)) << 16) | ((Math.round(green(a) + (green(b) - green(a)) * f)) << 8) | Math.round(blue(a) + (blue(b) - blue(a)) * f);
+        }
+        for (int i = 0; i < s.length; i++) d[i] = (s[i] & 0xFF000000) | lut[lum(s[i])];
+    }
+
+    /**
+     * Recolor: pixels close to the target colour take the new colour's hue and saturation, keeping their own shading
+     * (light and dark), with a soft edge. tolerance 0..1.
+     */
+    static void recolor(int[] s, int[] d, int target, int to, float tolerance) {
+        float[] th = new float[3], nh = new float[3], ph = new float[3];
+        android.graphics.Color.colorToHSV(target | 0xFF000000, th);
+        android.graphics.Color.colorToHSV(to | 0xFF000000, nh);
+        int tol = Math.round(tolerance * 255);
+        float vScale = th[2] > 0.02f ? nh[2] / th[2] : 1;
+        for (int i = 0; i < s.length; i++) {
+            int p = s[i];
+            if ((p >>> 24) == 0) { d[i] = p; continue; }
+            int df = Math.max(Math.abs(red(p) - red(target)), Math.max(Math.abs(green(p) - green(target)), Math.abs(blue(p) - blue(target))));
+            float k = df <= tol ? 1 : df >= tol + 40 ? 0 : 1 - (df - tol) / 40f; // soft edge
+            if (k <= 0) { d[i] = p; continue; }
+            android.graphics.Color.colorToHSV(p | 0xFF000000, ph);
+            ph[0] = nh[0];
+            ph[1] = Math.min(1, nh[1] * (th[1] > 0.02f ? ph[1] / th[1] : 1));
+            ph[2] = Math.min(1, ph[2] * vScale);
+            int q = android.graphics.Color.HSVToColor(ph);
+            d[i] = pix(p >>> 24, Math.round(red(p) + (red(q) - red(p)) * k), Math.round(green(p) + (green(q) - green(p)) * k), Math.round(blue(p) + (blue(q) - blue(p)) * k));
         }
     }
 

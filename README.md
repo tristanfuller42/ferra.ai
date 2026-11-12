@@ -110,7 +110,15 @@ Layout matches Procreate so you can switch between the two easily:
 - **Generate palettes** (Palettes → ✦ Generate…): type words like "ocean", "autumn", "neon pastel", "moody forest"
   (about 90 themes, moods and materials built in; any other word works too) for 6 palettes with different colour rules.
   Shuffle for more, tap a colour to use it, Save to keep a palette. Works offline.
-- **Colour adjustments**: Hue/Saturation/Brightness, Colour Balance, Gradient Map (plus all the tone adjustments).
+- **Colour adjustments**: Hue/Saturation/Brightness, Colour Balance, Curves per channel (All/Red/Green/Blue),
+  Gradient Map (preset library: Noir, Sepia, Sunset, Ocean, Forest, Neon, Thermal, Golden hour, Duotone; tap a
+  colour stop to edit it, saved as Custom), Recolor (tap a colour on the canvas; it becomes your current colour,
+  keeping its shading; slide for tolerance).
+- **Layer colour blend modes**: Hue, Saturation, Color, Luminosity, Exclusion (also saved in PSD).
+- **Brush colour dynamics** (Brush Studio → Colour): hue/saturation/brightness jitter per dab and per stroke,
+  pressure → hue shift, pressure → darker.
+- **Text colour** can be changed when editing text. **Onion skins** are tinted (red = before, green = after;
+  switch off in animation settings).
 - Everything works in colour: brushes, smudge, fills (stop at colour changes too), eyedropper, text, background,
   PSD/PNG/JPEG/GIF/animated PNG/MP4. Painting on a layer mask uses the brightness of your colour.
 

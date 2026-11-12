@@ -33,12 +33,17 @@ public class CanvasView extends View {
     public static final int DRAW = 0, ERASE = 1, MOVE = 2, SMUDGE = 3, SELECT = 4, CLONE = 5, LIQUIFY = 6, ADJUST = 7;
 
     public static final String[] BLEND_NAMES = {"Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten",
-            "Colour burn", "Colour dodge", "Hard light", "Soft light", "Difference", "Add"};
+            "Colour burn", "Colour dodge", "Hard light", "Soft light", "Difference", "Add",
+            "Hue", "Saturation", "Color", "Luminosity", "Exclusion"};
+    /** Short labels for the layer list (like Procreate's letters). */
+    public static final String[] BLEND_SHORT = {"N", "M", "S", "O", "D", "L", "CB", "CD", "HL", "SL", "Di", "A", "H", "Sa", "C", "Lu", "E"};
     static final android.graphics.BlendMode[] BLENDS = {
             android.graphics.BlendMode.SRC_OVER, android.graphics.BlendMode.MULTIPLY, android.graphics.BlendMode.SCREEN,
             android.graphics.BlendMode.OVERLAY, android.graphics.BlendMode.DARKEN, android.graphics.BlendMode.LIGHTEN,
             android.graphics.BlendMode.COLOR_BURN, android.graphics.BlendMode.COLOR_DODGE, android.graphics.BlendMode.HARD_LIGHT,
-            android.graphics.BlendMode.SOFT_LIGHT, android.graphics.BlendMode.DIFFERENCE, android.graphics.BlendMode.PLUS};
+            android.graphics.BlendMode.SOFT_LIGHT, android.graphics.BlendMode.DIFFERENCE, android.graphics.BlendMode.PLUS,
+            android.graphics.BlendMode.HUE, android.graphics.BlendMode.SATURATION, android.graphics.BlendMode.COLOR,
+            android.graphics.BlendMode.LUMINOSITY, android.graphics.BlendMode.EXCLUSION};
 
     public static final class Layer {
         public Bitmap bmp, thumb;
@@ -192,13 +197,17 @@ public class CanvasView extends View {
         float blend;                          // paint blend: 0 normal, 1 multiply, 2 darken, 3 lighten, 4 screen, 5 overlay
         float pattern;                        // 1 = halftone: reveals one dot grid fixed to the canvas (passes never double up)
         float patternScale = 12, patternDot = 0.35f; // grid spacing (canvas px) and dot radius (fraction of spacing)
+        // Colour dynamics: random hue/saturation/brightness per dab and per stroke, and pressure → colour
+        float hueJitter, satJitter, briJitter, strokeHue, strokeSat, strokeBri, pressureHue, pressureBri;
+        boolean colourDynamics() { return hueJitter + satJitter + briJitter + strokeHue + strokeSat + strokeBri + pressureHue + pressureBri > 0; }
         public boolean builtin;
 
         /** All adjustable settings as named values (used by Brush Studio, saving, reset). */
         static final String[] KEYS = {"spacing", "streamline", "stabilize", "taperStart", "taperEnd", "jitterSize",
                 "jitterOpacity", "scatter", "hard", "roundness", "angle", "follow", "grain", "grainScale",
                 "minSize", "minAlpha", "curve", "alpha", "sizeScale", "tiltSize", "tiltOpacity",
-                "speedSize", "speedOpacity", "motionFilter", "render", "blend", "pattern", "patternScale", "patternDot"};
+                "speedSize", "speedOpacity", "motionFilter", "render", "blend", "pattern", "patternScale", "patternDot",
+                "hueJitter", "satJitter", "briJitter", "strokeHue", "strokeSat", "strokeBri", "pressureHue", "pressureBri"};
 
         float get(String k) {
             switch (k) {
@@ -213,6 +222,9 @@ public class CanvasView extends View {
                 case "speedSize": return speedSize; case "speedOpacity": return speedOpacity;
                 case "motionFilter": return motionFilter; case "render": return render; case "blend": return blend;
                 case "pattern": return pattern; case "patternScale": return patternScale; case "patternDot": return patternDot;
+                case "hueJitter": return hueJitter; case "satJitter": return satJitter; case "briJitter": return briJitter;
+                case "strokeHue": return strokeHue; case "strokeSat": return strokeSat; case "strokeBri": return strokeBri;
+                case "pressureHue": return pressureHue; case "pressureBri": return pressureBri;
             }
             return 0;
         }
@@ -230,6 +242,9 @@ public class CanvasView extends View {
                 case "speedSize": speedSize = v; break; case "speedOpacity": speedOpacity = v; break;
                 case "motionFilter": motionFilter = v; break; case "render": render = v; break; case "blend": blend = v; break;
                 case "pattern": pattern = v; break; case "patternScale": patternScale = v; break; case "patternDot": patternDot = v; break;
+                case "hueJitter": hueJitter = v; break; case "satJitter": satJitter = v; break; case "briJitter": briJitter = v; break;
+                case "strokeHue": strokeHue = v; break; case "strokeSat": strokeSat = v; break; case "strokeBri": strokeBri = v; break;
+                case "pressureHue": pressureHue = v; break; case "pressureBri": pressureBri = v; break;
             }
         }
 
@@ -1055,6 +1070,7 @@ public class CanvasView extends View {
     public boolean pages; // Page Assist: each layer is a page, only the current page shows
     public int onion = 2, fps = 12, playFrame;
     public float onionOpacity = 0.35f;
+    public boolean onionTint = true; // onion skins in colour: earlier frames red, later frames green (like Procreate)
 
     /** Frame layer indices (layer 0 is excluded when it is the background). */
     public int firstFrame() { return (anim || pages) && animBackground && layers.size() > 1 ? 1 : 0; }
@@ -1069,9 +1085,11 @@ public class CanvasView extends View {
             for (int idx : new int[]{cur - k, cur + k}) {
                 if (idx < f0 || idx >= layers.size()) continue;
                 p.setAlpha(Math.round(255 * a * (idx < cur ? 1f : 0.6f)));
+                p.setColorFilter(onionTint ? new android.graphics.PorterDuffColorFilter(idx < cur ? 0xFFE53935 : 0xFF43A047, android.graphics.PorterDuff.Mode.SRC_IN) : null);
                 drawLayer(c, idx, p, false);
             }
         }
+        p.setColorFilter(null);
         if (cur < layers.size()) {
             p.setAlpha(layers.get(cur).opacity);
             p.setBlendMode(BLENDS[layers.get(cur).blend]);
@@ -1860,6 +1878,7 @@ public class CanvasView extends View {
                 if (adjPaint) { erasing = false; smudging = false; }
                 penInput = isPen;
                 stroking = true;
+                strokeCol = 0; // picked again (with the per-stroke colour jitter) at the first dab
                 picking = shaping = false;
                 strokeDirty.setEmpty();
                 sn = 0; pathLen = 0;
@@ -2369,6 +2388,9 @@ public class CanvasView extends View {
         int a = (int) (255 * opacity * b.alpha * alphaJ * (b.minAlpha + (1 - b.minAlpha) * pr) * (1 - b.tiltOpacity * tiltNow * 0.85f) * (1 - b.speedOpacity * speedNow * 0.8f));
         if (a <= 0) return;
         if (b.pattern >= 0.5f && !smudging) { halftoneDab(cx, cy, r, a); return; }
+        boolean dyn = !smudging && !erasing && b.colourDynamics() && !(current < layers.size() && cur().editMask);
+        int dabCol = dyn ? dabColour(pr) : 0;
+        if (dyn && cmap.length != docW * docH) cmap = new int[docW * docH];
         float soft = Math.max(1f, r * (1 - b.hard));
         int x0 = Math.max(0, (int) (cx - r - 1)), x1 = Math.min(docW - 1, (int) (cx + r + 1));
         int y0 = Math.max(0, (int) (cy - r - 1)), y1 = Math.min(docH - 1, (int) (cy + r + 1));
@@ -2419,8 +2441,12 @@ public class CanvasView extends View {
                 }
                 int v = (int) (a * c);
                 if (smudging) dab[(y - y0) * bw + (x - x0)] = v;
-                else if (heavy) { int m0 = mask[row + x] & 255; mask[row + x] = (byte) (m0 + v * (255 - m0) / 255); }
-                else if (v > (mask[row + x] & 255)) mask[row + x] = (byte) v;
+                else if (heavy) {
+                    int m0 = mask[row + x] & 255, m1 = m0 + v * (255 - m0) / 255;
+                    if (dyn) cmap[row + x] = m0 == 0 ? dabCol : mixRgb(cmap[row + x], dabCol, m1 == 0 ? 0 : (m1 - m0) * 255 / m1);
+                    mask[row + x] = (byte) m1;
+                }
+                else if (v > (mask[row + x] & 255)) { mask[row + x] = (byte) v; if (dyn) cmap[row + x] = dabCol; }
             }
         }
         if (smudging) {
@@ -2430,6 +2456,39 @@ public class CanvasView extends View {
         if (eventDirty.isEmpty()) eventDirty.set(x0, y0, x1 + 1, y1 + 1);
         else eventDirty.union(x0, y0, x1 + 1, y1 + 1);
     }
+
+    private int[] cmap = new int[0]; // per-pixel ink colour of this stroke, when the brush has colour dynamics
+    private int strokeCol;           // this stroke's colour (after per-stroke jitter); 0 = not picked yet
+
+    private static int mixRgb(int a, int b, int k) {
+        return 0xFF000000 | ((((a >> 16) & 255) + ((((b >> 16) & 255) - ((a >> 16) & 255)) * k) / 255) << 16)
+                | ((((a >> 8) & 255) + ((((b >> 8) & 255) - ((a >> 8) & 255)) * k) / 255) << 8)
+                | ((a & 255) + (((b & 255) - (a & 255)) * k) / 255);
+    }
+
+    private static float wrapHue(float h) { h %= 360; return h < 0 ? h + 360 : h; }
+
+    /** The colour of one dab: the stroke colour, jittered per dab and changed by pressure (Brush Studio → Colour). */
+    private int dabColour(float pr) {
+        Brush b = brush;
+        float[] hsv = new float[3];
+        if (strokeCol == 0) {
+            Color.colorToHSV(inkColor(), hsv);
+            if (b.strokeHue > 0) hsv[0] = wrapHue(hsv[0] + (rnd.nextFloat() * 2 - 1) * 180 * b.strokeHue);
+            if (b.strokeSat > 0) hsv[1] = clamp01(hsv[1] + (rnd.nextFloat() * 2 - 1) * b.strokeSat);
+            if (b.strokeBri > 0) hsv[2] = clamp01(hsv[2] + (rnd.nextFloat() * 2 - 1) * b.strokeBri);
+            strokeCol = Color.HSVToColor(hsv);
+        }
+        Color.colorToHSV(strokeCol, hsv);
+        if (b.hueJitter > 0) hsv[0] = wrapHue(hsv[0] + (rnd.nextFloat() * 2 - 1) * 180 * b.hueJitter);
+        if (b.satJitter > 0) hsv[1] = clamp01(hsv[1] + (rnd.nextFloat() * 2 - 1) * b.satJitter);
+        if (b.briJitter > 0) hsv[2] = clamp01(hsv[2] + (rnd.nextFloat() * 2 - 1) * b.briJitter);
+        if (b.pressureHue > 0) hsv[0] = wrapHue(hsv[0] + 90 * b.pressureHue * pr);
+        if (b.pressureBri > 0) hsv[2] = clamp01(hsv[2] * (1 - 0.8f * b.pressureBri * pr));
+        return Color.HSVToColor(hsv);
+    }
+
+    private static float clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
     /** Composites the mask over the backup into the layer, for the area touched since last flush. */
     private void flush() {
@@ -2451,6 +2510,7 @@ public class CanvasView extends View {
         int ink0 = inkColor(), bm = Math.round(brush.blend);
         int iR0 = (ink0 >> 16) & 255, iG0 = (ink0 >> 8) & 255, iB0 = ink0 & 255;
         boolean patternPaint = brush.pattern >= 0.5f && !erasing && !smudging;
+        int[] cm = !erasing && !patternPaint && brush.colourDynamics() && cmap.length == docW * docH && !cur().editMask ? cmap : null;
         for (int y = 0; y < h; y++) {
             int mrow = (r.top + y) * docW + r.left, brow = y * w;
             for (int x = 0; x < w; x++) {
@@ -2459,11 +2519,13 @@ public class CanvasView extends View {
                 if (m == 0) continue;
                 int px = buf[brow + x];
                 int A = px >>> 24, R = (px >> 16) & 255, G = (px >> 8) & 255, B = px & 255;
-                int iR = iR0, iG = iG0, iB = iB0;
+                int bR = iR0, bG = iG0, bB = iB0;
+                if (cm != null) { int c = cm[mrow + x]; bR = (c >> 16) & 255; bG = (c >> 8) & 255; bB = c & 255; }
+                int iR = bR, iG = bG, iB = bB;
                 if (bm != 0 && A != 0) { // brush blend mode, over what is already on the layer
-                    iR = (paintBlend(bm, iR0, R) * A + iR0 * (255 - A)) / 255;
-                    iG = (paintBlend(bm, iG0, G) * A + iG0 * (255 - A)) / 255;
-                    iB = (paintBlend(bm, iB0, B) * A + iB0 * (255 - A)) / 255;
+                    iR = (paintBlend(bm, bR, R) * A + bR * (255 - A)) / 255;
+                    iG = (paintBlend(bm, bG, G) * A + bG * (255 - A)) / 255;
+                    iB = (paintBlend(bm, bB, B) * A + bB * (255 - A)) / 255;
                 }
                 int nA, nR, nG, nB;
                 if (erasing) { if (lock) continue; nA = A * (255 - m) / 255; nR = R; nG = G; nB = B; }
@@ -3505,6 +3567,12 @@ public class CanvasView extends View {
     private boolean adjDragging;
 
     public boolean adjusting() { return adjSrc != null; }
+
+    /** The layer's pixel before the adjustment started (for picking a colour to recolor). */
+    public int adjSourceAt(float x, float y) {
+        int ix = Math.max(0, Math.min(docW - 1, (int) x)), iy = Math.max(0, Math.min(docH - 1, (int) y));
+        return adjSrc != null ? adjSrc[iy * docW + ix] : cur().bmp.getPixel(ix, iy);
+    }
 
     public void beginAdjust() {
         if (isLocked()) return;
