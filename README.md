@@ -28,7 +28,10 @@ Layout matches Procreate so you can switch between the two easily:
 - **Layers**: tap the selected layer for options: rename, select, copy, fill, clear, alpha lock, clipping mask,
   invert, merge down, blend mode (12 modes), delete. Tap the letter on a layer to change its blend mode.
 - **Text**: Actions → Add text.
-- **Drawing guides**: 2D grid, isometric, perspective (1/2/3-point, drag the vanishing points); symmetry vertical,
+- **Drawing guides** (Actions → Canvas → Edit drawing guide): editor with 2D Grid, Isometric, Perspective, Symmetry;
+  opacity, thickness, grid size, lines per vanishing point (6–180). Perspective: tap to add a point (up to 3), tap a
+  point to delete it, drag to move; every change can be undone. Saved with each drawing.
+  Earlier summary: perspective (1/2/3-point); symmetry vertical,
   horizontal, quadrant, radial. **Drawing assist** locks strokes to the guide lines.
 - **Transform modes**: Uniform, Freeform (stretch with edge/corner handles), Distort, Warp (4×4 mesh).
 - **Layer masks**: layer options → Add mask; tap the mask thumbnail to paint it (black hides, white shows).

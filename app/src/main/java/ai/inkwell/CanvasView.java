@@ -335,6 +335,12 @@ public class CanvasView extends View {
 
     // Perspective guide vanishing points; guide editing; drawing assist
     public float[] vp = new float[6];
+    public float guideOpacity = 0.35f, guideThick = 1.5f; // guide look (thickness in screen pixels)
+    public int vpRays = 36;                                // lines drawn from each vanishing point
+
+    private int guideColor(float mul) {
+        return ((int) (255 * Math.min(1f, guideOpacity * mul)) << 24) | 0x3D9BFF;
+    }
     public boolean editGuide, assist;
     private int dragVp = -1;
     private float asX, asY, adX, adY;
@@ -772,9 +778,9 @@ public class CanvasView extends View {
         render(c, true);
         Paint g = new Paint(Paint.ANTI_ALIAS_FLAG);
         g.setStyle(Paint.Style.STROKE);
-        g.setStrokeWidth(1.5f / sc);
+        g.setStrokeWidth(guideThick / sc);
         if (guide == 6) { // isometric
-            g.setColor(0x553D9BFF);
+            g.setColor(guideColor(1));
             float big = (float) Math.hypot(docW, docH);
             for (float ang : new float[]{30, 150, 90}) {
                 c.save();
@@ -785,13 +791,13 @@ public class CanvasView extends View {
         } else if (guide >= 7) { // perspective
             int n = guide - 6;
             float big = 3 * (float) Math.hypot(docW, docH);
-            g.setColor(0x553D9BFF);
+            g.setColor(guideColor(1));
             for (int k = 0; k < n; k++)
-                for (int r = 0; r < 36; r++) {
-                    double a = Math.PI * r / 18;
+                for (int r = 0; r < vpRays; r++) {
+                    double a = Math.PI * 2 * r / vpRays;
                     c.drawLine(vp[k * 2], vp[k * 2 + 1], vp[k * 2] + (float) Math.cos(a) * big, vp[k * 2 + 1] + (float) Math.sin(a) * big, g);
                 }
-            g.setColor(0xAA3D9BFF);
+            g.setColor(guideColor(2.2f));
             if (n == 1) c.drawLine(-big, vp[1], big, vp[1], g);
             else { // horizon through the first two points
                 float dx = vp[2] - vp[0], dy = vp[3] - vp[1], len = (float) Math.hypot(dx, dy) + 1e-3f;
@@ -801,11 +807,11 @@ public class CanvasView extends View {
             for (int k = 0; k < n; k++) c.drawCircle(vp[k * 2], vp[k * 2 + 1], (editGuide ? 14 : 7) / sc, g);
             g.setStyle(Paint.Style.STROKE);
         } else if (guide == 1) { // grid
-            g.setColor(0x553D9BFF);
+            g.setColor(guideColor(1));
             for (int x = gridSize; x < docW; x += gridSize) c.drawLine(x, 0, x, docH, g);
             for (int y = gridSize; y < docH; y += gridSize) c.drawLine(0, y, docW, y, g);
         } else if (guide >= 2 && guide <= 5) { // symmetry axes
-            g.setColor(0xAA3D9BFF);
+            g.setColor(guideColor(2.2f));
             float cx = docW / 2f, cy = docH / 2f;
             if (guide == 2 || guide == 4) c.drawLine(cx, 0, cx, docH, g);
             if (guide == 3 || guide == 4) c.drawLine(0, cy, docW, cy, g);
@@ -1116,6 +1122,14 @@ public class CanvasView extends View {
         pt[0] = asX + adX * t; pt[1] = asY + adY * t;
     }
 
+    private float vpDownX, vpDownY;
+    private boolean vpMoved;
+    private float[] vpBefore;
+
+    /**
+     * Editing perspective: drag a point to move it, tap a point to delete it,
+     * tap empty canvas to add one (up to 3). Every change is an undo step.
+     */
     private boolean vpTouch(MotionEvent e, int action) {
         view.invert(inverse);
         float[] f = {e.getX(), e.getY()};
@@ -1123,16 +1137,60 @@ public class CanvasView extends View {
         int n = guide - 6;
         if (action == MotionEvent.ACTION_DOWN) {
             dragVp = -1;
-            float best = 48 / view.mapRadius(1f) * getResources().getDisplayMetrics().density;
+            vpMoved = false;
+            vpDownX = e.getX(); vpDownY = e.getY();
+            vpBefore = vp.clone();
+            float best = 40 / view.mapRadius(1f) * getResources().getDisplayMetrics().density;
             for (int k = 0; k < n; k++) {
                 float d = (float) Math.hypot(f[0] - vp[k * 2], f[1] - vp[k * 2 + 1]);
                 if (d < best) { best = d; dragVp = k; }
             }
-        } else if (action == MotionEvent.ACTION_MOVE && dragVp >= 0) {
-            vp[dragVp * 2] = f[0]; vp[dragVp * 2 + 1] = f[1];
-            invalidate();
-        } else if (action != MotionEvent.ACTION_MOVE) dragVp = -1;
+        } else if (action == MotionEvent.ACTION_MOVE) {
+            if (Math.hypot(e.getX() - vpDownX, e.getY() - vpDownY) > 8 * getResources().getDisplayMetrics().density) vpMoved = true;
+            if (dragVp >= 0 && vpMoved) { vp[dragVp * 2] = f[0]; vp[dragVp * 2 + 1] = f[1]; invalidate(); }
+        } else if (action == MotionEvent.ACTION_UP) {
+            int gBefore = guide;
+            if (dragVp >= 0 && !vpMoved && n > 1) { // tap a point: delete it
+                float[] nv = new float[6];
+                for (int k = 0, j = 0; k < n; k++) if (k != dragVp) { nv[j * 2] = vp[k * 2]; nv[j * 2 + 1] = vp[k * 2 + 1]; j++; }
+                vp = nv;
+                guide = 6 + n - 1;
+            } else if (dragVp < 0 && !vpMoved && n < 3) { // tap empty canvas: add a point
+                vp[n * 2] = f[0]; vp[n * 2 + 1] = f[1];
+                guide = 6 + n + 1;
+            }
+            if (guide != gBefore || !java.util.Arrays.equals(vp, vpBefore)) guideEdit(vpBefore, gBefore);
+            dragVp = -1;
+        } else dragVp = -1;
         return true;
+    }
+
+    /** Records a perspective change (points / number of points) as an undo step. */
+    public void guideEdit(float[] beforeVp, int beforeGuide) {
+        float[] b = beforeVp.clone(), a = vp.clone();
+        int ga = guide;
+        push(new Op(() -> { vp = b.clone(); guide = beforeGuide; invalidate(); },
+                    () -> { vp = a.clone(); guide = ga; invalidate(); }, 64));
+        changed();
+    }
+
+    /** Guide settings as text (saved with each drawing). */
+    public String guideState() {
+        StringBuilder sb = new StringBuilder();
+        sb.append(guide).append(',').append(gridSize).append(',').append(assist).append(',')
+          .append(guideOpacity).append(',').append(guideThick).append(',').append(vpRays);
+        for (float v : vp) sb.append(',').append(v);
+        return sb.toString();
+    }
+
+    public void setGuideState(String s) {
+        try {
+            String[] v = s.trim().split(",");
+            guide = Integer.parseInt(v[0]); gridSize = Integer.parseInt(v[1]); assist = Boolean.parseBoolean(v[2]);
+            guideOpacity = Float.parseFloat(v[3]); guideThick = Float.parseFloat(v[4]); vpRays = Integer.parseInt(v[5]);
+            for (int i = 0; i < 6; i++) vp[i] = Float.parseFloat(v[6 + i]);
+        } catch (Exception ignored) { }
+        invalidate();
     }
 
     // ---------- Brush engine ----------

@@ -598,4 +598,52 @@ public class FeatureTest extends Base {
         int[] c = toDoc(W * .5f, H * .5f);
         assertTrue("redo re-applied the move", (L().getPixel(c[0], c[1]) >>> 24) > 200);
     }
+
+    void tap(float x, float y) { stroke(new float[][]{{x, y}}, MotionEvent.TOOL_TYPE_FINGER, 1); }
+
+    float[] vpScreen(int k) {
+        float[] p = {cv.vp[k * 2], cv.vp[k * 2 + 1]};
+        ((android.graphics.Matrix) get(cv, "view")).mapPoints(p);
+        return p;
+    }
+
+    @Test public void perspective_points_add_move_delete_with_undo() {
+        cv.guide = 8; cv.resetVps();
+        call(act, "guideEditor");
+        settle();
+        assertTrue("editing points", cv.editGuide);
+        assertEquals("2-point", 8, cv.guide);
+        tap(W * .5f, H * .25f);                                  // add a third point
+        assertEquals("3-point after tap", 9, cv.guide);
+        cv.undo();
+        assertEquals("undo removes the added point", 8, cv.guide);
+        cv.redo();
+        assertEquals(9, cv.guide);
+        float[] p0 = vpScreen(0);
+        float oldX = cv.vp[0];
+        line(p0[0], p0[1], p0[0] + 120, p0[1] + 40);            // drag point 0
+        assertTrue("point moved", Math.abs(cv.vp[0] - oldX) > 20);
+        cv.undo();
+        assertEquals("undo puts the point back", oldX, cv.vp[0], 0.5f);
+        float[] p1 = vpScreen(1);
+        tap(p1[0], p1[1]);                                       // tap a point: delete
+        assertEquals("deleted a point", 8, cv.guide);
+        cv.undo();
+        assertEquals("undo restores it", 9, cv.guide);
+        cv.vpRays = 120;
+        cv.guideOpacity = 0.6f; cv.guideThick = 3f;
+        cv.invalidate();
+        settle();
+        shot("64_perspective_editor");
+        // kept with the drawing
+        String id = (String) get(act, "curId");
+        call(act, "showGallery"); settle();
+        call(act, "newGalleryItem", 800, 800); settle();
+        assertEquals("new drawing has no guide", 0, cv.guide);
+        call(act, "showGallery"); settle();
+        call(act, "openGalleryItem", id); settle();
+        assertEquals("guide restored", 9, cv.guide);
+        assertEquals(120, cv.vpRays);
+        assertEquals(0.6f, cv.guideOpacity, 0.001f);
+    }
 }

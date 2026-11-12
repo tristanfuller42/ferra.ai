@@ -459,6 +459,9 @@ public class MainActivity extends Activity {
     private void newDocument(int w, int h) {
         canvas.docW = w; canvas.docH = h;
         canvas.setDocument(w, h, java.util.Collections.singletonList(canvas.newLayer("Layer 1")));
+        canvas.guide = 0; canvas.assist = false; canvas.editGuide = false; // each new drawing starts without a guide
+        canvas.guideOpacity = 0.35f; canvas.guideThick = 1.5f; canvas.vpRays = 36; canvas.gridSize = 100;
+        if (bottom != null && canvas.tool != CanvasView.SELECT && canvas.tool != CanvasView.MOVE) bottom.setVisibility(View.GONE);
     }
 
     // ---------- UI helpers ----------
@@ -900,47 +903,96 @@ public class MainActivity extends Activity {
                 .setNegativeButton("Cancel", null).show();
     }
 
-    private void guideMenu(View anchor) {
-        Ui.PopMenu m = new Ui.PopMenu(this, anchor);
-        String[] g = {"Off", "2D grid", "Symmetry: vertical", "Symmetry: horizontal", "Symmetry: quadrant", "Symmetry: radial (8)",
-                "Isometric", "Perspective: 1-point", "Perspective: 2-point", "Perspective: 3-point"};
-        for (int i = 0; i < g.length; i++) m.getMenu().add(0, i, i, (canvas.guide == i ? "✓ " : "") + g[i]);
-        m.getMenu().add(0, 50, 50, (canvas.assist ? "✓ " : "") + "Drawing assist (lock strokes to the guide)");
-        m.getMenu().add(0, 51, 51, "Grid / isometric spacing…");
-        m.getMenu().add(0, 52, 52, "Move vanishing points…");
-        m.setOnMenuItemClickListener(it -> {
-            int id = it.getItemId();
-            if (id == 50) { canvas.assist = !canvas.assist; return true; }
-            if (id == 51) {
-                android.widget.EditText et = new android.widget.EditText(this);
-                et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-                et.setText(String.valueOf(canvas.gridSize));
-                new AlertDialog.Builder(this).setTitle("Spacing (pixels)").setView(et)
-                        .setPositiveButton("OK", (d, w) -> { canvas.gridSize = Math.max(8, parse(et)); canvas.invalidate(); }).show();
-                return true;
-            }
-            if (id == 52) { editVanishingPoints(); return true; }
-            canvas.guide = id;
-            if (id >= 7) { canvas.resetVps(); editVanishingPoints(); }
-            canvas.invalidate();
-            return true;
-        });
-        m.show();
+    private void guideMenu(View anchor) { guideEditor(); }
+
+    private void editVanishingPoints() { guideEditor(); }
+
+    private int guideTab() {
+        int g = canvas.guide;
+        return g == 1 ? 1 : g == 6 ? 2 : g >= 7 ? 3 : g >= 2 ? 4 : 0;
     }
 
-    private void editVanishingPoints() {
-        if (canvas.guide < 7) { toast("Choose a perspective guide first"); return; }
-        canvas.editGuide = true;
+    /** Drawing Guide editor (like Procreate's): type, look, assisted drawing; perspective points editable with undo. */
+    private void guideEditor() {
+        int tab = guideTab();
+        canvas.editGuide = tab == 3;
         canvas.invalidate();
-        LinearLayout a = barRow();
+        LinearLayout types = barRow();
+        String[] names = {"Off", "2D Grid", "Isometric", "Perspective", "Symmetry"};
+        for (int i = 0; i < names.length; i++) {
+            int k = i;
+            chip(types, names[i], i == tab, v -> {
+                if (k == guideTab()) return;
+                if (k == 0) canvas.guide = 0;
+                else if (k == 1) canvas.guide = 1;
+                else if (k == 2) canvas.guide = 6;
+                else if (k == 3) { canvas.guide = 8; canvas.resetVps(); }
+                else canvas.guide = 2;
+                canvas.invalidate();
+                guideEditor();
+            });
+        }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        if (tab == 1 || tab == 2) box.addView(slider("Grid size", canvas.gridSize, 8, 600, v -> { canvas.gridSize = v; canvas.invalidate(); }));
+        if (tab == 3) {
+            TextView hint = new TextView(this);
+            hint.setText("Tap the canvas to add a vanishing point (up to 3) · tap a point to delete it · drag to move · undo works");
+            hint.setTextColor(0xFF9A9A9E);
+            hint.setTextSize(13);
+            box.addView(hint);
+            box.addView(slider("Lines per point", canvas.vpRays, 6, 180, v -> { canvas.vpRays = v; canvas.invalidate(); }));
+        }
+        if (tab == 4) {
+            LinearLayout sym = barRow();
+            String[] sn = {"Vertical", "Horizontal", "Quadrant", "Radial"};
+            for (int i = 0; i < sn.length; i++) {
+                int g = 2 + i;
+                chip(sym, sn[i], canvas.guide == g, v -> { canvas.guide = g; canvas.invalidate(); guideEditor(); });
+            }
+            box.addView(sym);
+        }
+        if (tab != 0) {
+            box.addView(slider("Opacity", Math.round(canvas.guideOpacity * 100), 5, 100, v -> { canvas.guideOpacity = v / 100f; canvas.invalidate(); }));
+            box.addView(slider("Thickness", Math.round(canvas.guideThick * 10), 5, 60, v -> { canvas.guideThick = v / 10f; canvas.invalidate(); }));
+        }
+        LinearLayout end = barRow();
+        if (tab != 0 && tab != 4) {
+            android.widget.Switch sw = new android.widget.Switch(this);
+            sw.setText("Assisted drawing  ");
+            sw.setTextColor(Color.WHITE);
+            sw.setChecked(canvas.assist);
+            sw.setOnCheckedChangeListener((b, on) -> canvas.assist = on);
+            end.addView(sw);
+        }
+        if (tab == 3) chip(end, "Reset points", false, v -> {
+            float[] before = canvas.vp.clone();
+            int gb = canvas.guide;
+            canvas.guide = 8;
+            canvas.resetVps();
+            canvas.guideEdit(before, gb);
+        });
+        chip(end, "Done", true, v -> { canvas.editGuide = false; canvas.invalidate(); bottom.setVisibility(View.GONE); });
+        showBar(types, box, end);
+    }
+
+    /** A labelled slider row with the current value. */
+    private LinearLayout slider(String label, int value, int min, int max, java.util.function.IntConsumer onChange) {
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
         TextView t = new TextView(this);
-        t.setText("Drag the vanishing points. ");
-        t.setTextColor(Color.WHITE);
-        a.addView(t);
-        chip(a, (canvas.assist ? "✓ " : "") + "Assist", canvas.assist, v -> { canvas.assist = !canvas.assist; editVanishingPoints(); });
-        chip(a, "Reset", false, v -> canvas.resetVps());
-        chip(a, "Done", true, v -> { canvas.editGuide = false; canvas.invalidate(); bottom.setVisibility(View.GONE); });
-        showBar(a);
+        t.setTextColor(0xFFE8E8E8);
+        t.setTextSize(13);
+        t.setText(label + "  " + value);
+        r.addView(t, new LinearLayout.LayoutParams((int) (130 * dp), -2));
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(max - min);
+        sb.setProgress(Math.max(0, Math.min(max - min, value - min)));
+        sb.setOnSeekBarChangeListener(new Slider() {
+            public void onProgressChanged(SeekBar s2, int p, boolean u) { t.setText(label + "  " + (p + min)); onChange.accept(p + min); }
+        });
+        r.addView(sb, new LinearLayout.LayoutParams((int) (240 * dp), (int) (40 * dp)));
+        return r;
     }
 
     private Ui.Icon icon(LinearLayout parent, int kind, int size, View.OnClickListener l) {
@@ -2287,8 +2339,12 @@ public class MainActivity extends Activity {
     private File tlDir(String id) { return new File(gdir, id + "_tl"); }
     private File bgFile(String id) { return new File(gdir, id + ".bg"); }
 
+    private File guideFile(String id) { return new File(gdir, id + ".guide"); }
+
     private void saveBackground() {
         try (FileOutputStream o = new FileOutputStream(bgFile(curId))) { o.write((canvas.bgGrey + "," + canvas.bgVisible).getBytes("UTF-8")); }
+        catch (Exception ignored) { }
+        try (FileOutputStream o = new FileOutputStream(guideFile(curId))) { o.write(canvas.guideState().getBytes("UTF-8")); }
         catch (Exception ignored) { }
     }
 
@@ -2300,6 +2356,9 @@ public class MainActivity extends Activity {
             canvas.bgGrey = Integer.parseInt(v[0]);
             canvas.bgVisible = Boolean.parseBoolean(v[1]);
         } catch (Exception ignored) { }
+        canvas.guide = 0; canvas.assist = false; canvas.editGuide = false;
+        try { canvas.setGuideState(new String(java.nio.file.Files.readAllBytes(guideFile(curId).toPath()), "UTF-8")); }
+        catch (Exception ignored) { }
         canvas.invalidate();
     }
     private String newId() { return Long.toString(System.currentTimeMillis(), 36); }
@@ -2509,7 +2568,7 @@ public class MainActivity extends Activity {
                 }
                 case 3:
                     confirm("Delete \"" + nameOf(id) + "\"? This can't be undone.", () -> {
-                        for (File f : new File[]{docFile(id), thumbFile(id), nameFile(id), selFile(id), bgFile(id)}) f.delete();
+                        for (File f : new File[]{docFile(id), thumbFile(id), nameFile(id), selFile(id), bgFile(id), guideFile(id)}) f.delete();
                         File[] tl = tlDir(id).listFiles();
                         if (tl != null) for (File f : tl) f.delete();
                         tlDir(id).delete();
