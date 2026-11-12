@@ -221,23 +221,24 @@ public class MainActivity extends Activity {
         pbg.setColor(Ui.PANEL);
         pbg.setCornerRadius(12 * dp);
         panel.setBackground(pbg);
+        LinearLayout head = new LinearLayout(this); // title and "+" only: everything else is a gesture or in layer options
+        head.setGravity(Gravity.CENTER_VERTICAL);
         TextView lt = new TextView(this);
         lt.setText("Layers");
         lt.setTextColor(Color.WHITE);
         lt.setTextSize(17);
-        lt.setPadding((int) (6 * dp), 0, 0, (int) (4 * dp));
-        panel.addView(lt);
+        lt.setPadding((int) (6 * dp), 0, 0, 0);
+        head.addView(lt, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView add = new TextView(this);
+        add.setText("+");
+        add.setTextColor(Color.WHITE);
+        add.setTextSize(26);
+        add.setPadding((int) (14 * dp), 0, (int) (10 * dp), 0);
+        add.setContentDescription("New layer");
+        add.setOnClickListener(v -> { if (!canvas.addLayer(canvas.newLayer("Layer " + (canvas.layers.size() + 1)))) full(); });
+        head.addView(add);
+        panel.addView(head);
         panel.setPadding((int) (6 * dp), (int) (6 * dp), (int) (6 * dp), (int) (6 * dp));
-        LinearLayout r1 = row(), r2 = row();
-        button(r1, "+ New", v -> { if (!canvas.addLayer(canvas.newLayer("Layer " + (canvas.layers.size() + 1)))) full(); });
-        button(r1, "Copy", v -> { if (!canvas.duplicate()) full(); });
-        button(r1, "Delete", v -> confirm("Delete this layer?", canvas::deleteLayer));
-        button(r2, "Up", v -> canvas.moveLayer(1));
-        button(r2, "Down", v -> canvas.moveLayer(-1));
-        button(r2, "Merge", v -> canvas.mergeDown());
-        button(r2, "Clear", v -> canvas.clearLayer());
-        panel.addView(r1);
-        panel.addView(r2);
         TextView ol = new TextView(this);
         ol.setText("Layer opacity");
         ol.setTextColor(Color.WHITE);
@@ -505,12 +506,6 @@ public class MainActivity extends Activity {
         t.setOnClickListener(l);
         bar.addView(t, new LinearLayout.LayoutParams(-2, -1));
         return t;
-    }
-
-    private LinearLayout row() {
-        LinearLayout r = new LinearLayout(this);
-        r.setLayoutParams(new LinearLayout.LayoutParams(-1, (int) (40 * dp)));
-        return r;
     }
 
     private static void highlight(TextView t, boolean on) {

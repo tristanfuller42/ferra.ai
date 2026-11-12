@@ -98,7 +98,8 @@ long-press to rename, duplicate or delete. Drawings save automatically.
   - Draw and **hold** at the end = QuickShape: snaps to a straight line (keep holding and move to adjust),
     or an ellipse if the stroke ends near where it started.
 - **Move tool**: drag moves the current layer; pinch/twist scales and rotates it. Applied when you pick another tool.
-- **Layers**: add, copy, delete, reorder, merge down, clear, hide/show, opacity.
+- **Layers**: ＋ adds a layer. Drag to reorder, swipe left for Lock/Duplicate/Delete, pinch rows to merge, tap the
+  current layer for options (clear, merge down, mask, etc.), dot to hide/show, slider for opacity.
 - Once a stylus is used, one finger **erases** (with the Eraser's brush and size). Prefs → Finger when using a stylus:
   Navigate / Paint / Erase. Two fingers still zoom and pan.
 - **Canvas**: start a new drawing at any size (presets: screen, square, A4/Letter/A5 at 300 dpi, comic page, HD, 4K, Instagram, or custom), or resize the current one (scale artwork, or crop/extend). Max about 9 megapixels.
