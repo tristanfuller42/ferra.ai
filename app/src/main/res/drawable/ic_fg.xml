@@ -1,7 +1,7 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <!-- Inkwell: an ink bottle (light grey on black) -->
-    <path android:fillColor="#D5D5D5"
+    <!-- Inkwell: an ink bottle (white on dark grey) -->
+    <path android:fillColor="#FFFFFF"
         android:pathData="M49.71,35.99 L51.3,25.94 C51.67,22.26 56.33,22.26 56.7,25.94 L58.29,35.99 Z M45.3,35.74 H62.7 Q63.43,35.74 63.43,36.48 V38.68 Q63.43,39.42 62.7,39.42 H45.3 Q44.57,39.42 44.57,38.68 V36.48 Q44.57,35.74 45.3,35.74 Z M43.34,39.17 H64.66 Q65.64,39.17 65.64,40.15 V42.11 Q65.64,43.09 64.66,43.09 H43.34 Q42.36,43.09 42.36,42.11 V40.15 Q42.36,39.17 43.34,39.17 Z M46.04,42.6 H61.72 Q61.72,42.6 61.72,42.61 V50.69 Q61.72,50.69 61.72,50.69 H46.04 Q46.04,50.69 46.04,50.69 V42.61 Q46.04,42.6 46.04,42.6 Z M41.62,50.2 H66.38 Q71.77,50.2 71.77,55.59 V79.61 Q71.77,85 66.38,85 H41.62 Q36.23,85 36.23,79.61 V55.59 Q36.23,50.2 41.62,50.2 Z" />
 </vector>
