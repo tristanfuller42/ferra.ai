@@ -930,7 +930,8 @@ public class MainActivity extends Activity {
         if (x < 0 || y < 0 || x > canvas.getWidth() || y > canvas.getHeight()) return;
         canvas.colorDrop(x, y, canvas.fillThreshold);
         cdHeld = true; cdHoldX = cdX; cdBaseThr = canvas.fillThreshold;
-        hud("ColorDrop threshold " + pct(canvas.fillThreshold) + "% · slide left/right");
+        showThresholdBar(canvas.fillThreshold);
+        if (this.cdGhost != null) this.cdGhost.setVisibility(View.GONE);
     };
 
     private static int pct(int thr) { return Math.round(thr * 100 / 255f); }
@@ -955,20 +956,97 @@ public class MainActivity extends Activity {
         if (idle) canvas.postOnAnimation(refill);
     }
 
+    // ColorDrop helpers on screen: a grey dot that follows the finger, and a threshold bar at the top (like Procreate)
+    private View cdGhost, cdBar;
+    private TextView cdBarLabel;
+    private View cdBarFill;
+
+    private void showDropGhost(float rawX, float rawY) {
+        if (cdGhost == null) {
+            cdGhost = new View(this) {
+                final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                @Override protected void onDraw(Canvas c) {
+                    float w = getWidth(), r = 15 * dp, cx = w / 2, cy = r + 3 * dp, tip = getHeight() - 2 * dp;
+                    p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(2 * dp); p.setColor(Ui.ACCENT);
+                    c.drawLine(cx, cy + r, cx, tip, p); // stem down to where it will drop
+                    p.setStyle(Paint.Style.FILL); p.setColor(0xFF000000 | canvas.grey * 0x10101);
+                    c.drawCircle(cx, cy, r, p);
+                    p.setStyle(Paint.Style.STROKE); p.setColor(0xFF1C1C1E); p.setStrokeWidth(4.5f * dp);
+                    c.drawCircle(cx, cy, r + 1 * dp, p); // dark outline: shows on white paper
+                    p.setColor(Color.WHITE); p.setStrokeWidth(2.5f * dp);
+                    c.drawCircle(cx, cy, r, p);
+                    p.setStyle(Paint.Style.FILL); p.setColor(Ui.ACCENT);
+                    c.drawCircle(cx, tip, 3 * dp, p);
+                }
+            };
+            shell.addView(cdGhost, new FrameLayout.LayoutParams((int) (40 * dp), (int) (78 * dp)));
+        }
+        int[] sl = new int[2];
+        shell.getLocationOnScreen(sl);
+        cdGhost.setTranslationX(rawX - sl[0] - 20 * dp);
+        cdGhost.setTranslationY(rawY - sl[1] - 76 * dp); // above the finger so it stays visible
+        cdGhost.setVisibility(View.VISIBLE);
+        cdGhost.invalidate();
+    }
+
+    private void showThresholdBar(int thr) {
+        if (cdBar == null) {
+            LinearLayout b = new LinearLayout(this);
+            b.setOrientation(LinearLayout.VERTICAL);
+            b.setPadding((int) (14 * dp), (int) (8 * dp), (int) (14 * dp), (int) (10 * dp));
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setColor(0xF02C2C2E); bg.setCornerRadius(12 * dp);
+            b.setBackground(bg);
+            cdBarLabel = new TextView(this);
+            cdBarLabel.setTextColor(Color.WHITE);
+            cdBarLabel.setTextSize(13);
+            cdBarLabel.setGravity(Gravity.CENTER);
+            b.addView(cdBarLabel);
+            FrameLayout track = new FrameLayout(this);
+            android.graphics.drawable.GradientDrawable tb = new android.graphics.drawable.GradientDrawable();
+            tb.setColor(0xFF48484A); tb.setCornerRadius(3 * dp);
+            track.setBackground(tb);
+            cdBarFill = new View(this);
+            android.graphics.drawable.GradientDrawable fb = new android.graphics.drawable.GradientDrawable();
+            fb.setColor(Ui.ACCENT); fb.setCornerRadius(3 * dp);
+            cdBarFill.setBackground(fb);
+            track.addView(cdBarFill, new FrameLayout.LayoutParams(0, -1));
+            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams((int) (220 * dp), (int) (6 * dp));
+            tl.topMargin = (int) (6 * dp);
+            b.addView(track, tl);
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+            lp.topMargin = (int) (64 * dp);
+            shell.addView(b, lp);
+            cdBar = b;
+        }
+        cdBarLabel.setText("ColorDrop Threshold   " + pct(thr) + "%");
+        ViewGroup.LayoutParams fl = cdBarFill.getLayoutParams();
+        fl.width = Math.round(220 * dp * thr / 255f);
+        cdBarFill.setLayoutParams(fl);
+        cdBar.setVisibility(View.VISIBLE);
+        cdBar.bringToFront();
+    }
+
+    private void hideDropHelpers() {
+        if (cdGhost != null) cdGhost.setVisibility(View.GONE);
+        if (cdBar != null) cdBar.setVisibility(View.GONE);
+    }
+
     private boolean colorDropTouch(View v, android.view.MotionEvent e) {
         switch (e.getActionMasked()) {
             case android.view.MotionEvent.ACTION_DOWN:
                 cdX = e.getRawX(); cdY = e.getRawY(); cdDrag = cdHeld = false;
                 break;
             case android.view.MotionEvent.ACTION_MOVE:
-                if (cdHeld) { // like Procreate: slide sideways to change the threshold
+                if (cdHeld) { // like Procreate: slide sideways to change the threshold; the bar at the top shows it
                     int thr = cdBaseThr + Math.round((e.getRawX() - cdHoldX) / (canvas.getWidth() * 0.6f) * 255);
                     thr = Math.max(0, Math.min(255, thr));
                     setFillThreshold(thr);
-                    hud("ColorDrop threshold " + pct(thr) + "%");
+                    showThresholdBar(thr);
                     return true;
                 }
                 if (Math.hypot(e.getRawX() - cdX, e.getRawY() - cdY) > 24 * dp) cdDrag = true;
+                if (cdDrag) showDropGhost(e.getRawX(), e.getRawY());
                 if (cdDrag && Math.hypot(e.getRawX() - cdX, e.getRawY() - cdY) > 6 * dp) { // still moving: restart the hold timer
                     cdX = e.getRawX(); cdY = e.getRawY();
                     v.removeCallbacks(cdHold);
@@ -978,6 +1056,7 @@ public class MainActivity extends Activity {
                 break;
             case android.view.MotionEvent.ACTION_UP:
                 v.removeCallbacks(cdHold);
+                hideDropHelpers();
                 if (cdHeld) { cdHeld = false; showFillBar(); return true; }
                 if (cdDrag) {
                     int[] loc = new int[2];
@@ -989,6 +1068,7 @@ public class MainActivity extends Activity {
                 break;
             case android.view.MotionEvent.ACTION_CANCEL:
                 v.removeCallbacks(cdHold);
+                hideDropHelpers();
                 cdHeld = false;
                 break;
         }

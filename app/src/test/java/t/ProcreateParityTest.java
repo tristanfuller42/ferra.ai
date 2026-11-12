@@ -378,11 +378,15 @@ public class ProcreateParityTest extends Base {
         ShadowLooper.idleMainLooper(600, TimeUnit.MILLISECONDS); // hold: drops the fill
         long held = inkSum(L());
         assertTrue("hold drops the fill", held > lines * 3);
-        assertTrue(hudText().contains("threshold"));
+        View tbar = (View) get(act, "cdBar");
+        assertTrue("threshold bar shows at the top", tbar != null && tbar.getVisibility() == View.VISIBLE);
+        assertTrue(String.valueOf(((TextView) get(act, "cdBarLabel")).getText()).contains("%"));
+        shot("94_threshold_bar");
         int thr0 = cv.fillThreshold;
         d.dispatchTouchEvent(evRaw(MotionEvent.ACTION_MOVE, ex + W * .2f, ey)); settle();
         assertTrue("slide right raises the threshold", cv.fillThreshold > thr0);
         d.dispatchTouchEvent(evRaw(MotionEvent.ACTION_UP, ex + W * .2f, ey)); settle();
+        assertEquals("bar hides when you lift", View.GONE, ((View) get(act, "cdBar")).getVisibility());
         cv.undo();
         assertEquals("one undo step for the drop", lines, inkSum(L()));
         cv.redo();

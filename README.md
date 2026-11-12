@@ -55,8 +55,8 @@ Layout matches Procreate so you can switch between the two easily:
 - **Brush cursor**: outline of the brush when a stylus hovers (Prefs).
 - **QuickShape**: line, ellipse or rectangle; after lifting, drag the blue handles to edit. Put a second finger down
   while holding to make a perfect circle / square or snap lines to 15°.
-- **ColorDrop**: drag the colour circle onto the canvas. Lift to fill, or **hold** to fill and then slide left/right to
-  change the threshold (shown in %). After a fill, a bar shows Threshold % and Continue filling (each tap fills).
+- **ColorDrop**: drag the colour circle onto the canvas (a dot shows where it will drop). Lift to fill, or **hold** to fill and then slide left/right to
+  change the threshold (a bar at the top shows 0–100%). After a fill, a bar shows Threshold % and Continue filling (each tap fills).
 - **Selection**: Polygon (tap corners, tap the first corner to close), Automatic threshold slider, marching ants.
 - **Gallery**: Select → Stack / Unstack / Duplicate / Delete; drag to reorder; pinch out for full preview;
   tap a title to rename.
@@ -78,7 +78,7 @@ Layout matches Procreate so you can switch between the two easily:
 - **Page Assist**: Actions → Canvas. Each layer is a page; ‹ › to flip; export all pages as one PDF.
 - **Fonts**: Text → ＋ Import font (.ttf / .otf).
 - **Drag and drop**: drag images from another app (split screen) onto the canvas (new layer) or the Gallery (new drawing).
-- **Transform**: Rotate 45°, magnetics (with Snapping on: rotation sticks to 15°, size to 25% steps), Advanced mesh warp (5×5).
+- **Transform**: orange rotation lever above the box (drag to rotate, angle shown; snaps to 15° with Snapping on), Rotate 45°, magnetics (with Snapping on: rotation sticks to 15°, size to 25% steps), Advanced mesh warp (5×5).
 - **Gallery**: Sort (manual, name, newest, oldest); Select → Share or Export several (PNG/JPEG/PSD into a folder, or one PDF).
 - **Share**: Actions → Share → a format opens the share sheet (send to any app); "Save to Files" saves a copy.
 - **Back gesture**: closes what is open (panel, preview, tool mode); on the canvas it goes to the Gallery; in the Gallery it leaves the app.

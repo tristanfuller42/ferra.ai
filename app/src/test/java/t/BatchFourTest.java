@@ -332,4 +332,49 @@ public class BatchFourTest extends Base {
         assertEquals("b:Ink pen", ((String[]) call(act, "qmSlots"))[2]);
         call(act, "setTool", CanvasView.DRAW);
     }
+
+    @Test public void transform_rotation_lever() {
+        pen(new float[][]{{W * .35f, H * .45f}, {W * .65f, H * .45f}});
+        call(act, "setTool", CanvasView.MOVE); settle();
+        cv.setXform(1); // freeform
+        float[] h = (float[]) call(cv, "rotHandle");
+        assertNotNull("lever shown", h);
+        settle(); shot("92_rotation_lever");
+        float[] c = (float[]) call(cv, "contentCentre");
+        float r = (float) Math.hypot(h[0] - c[0], h[1] - c[1]);
+        // drag the knob a quarter turn clockwise around the centre
+        float[][] path = new float[10][];
+        for (int i = 0; i < 10; i++) { double a = -Math.PI / 2 + (Math.PI / 2) * i / 9; path[i] = new float[]{(float) (c[0] + Math.cos(a) * r), (float) (c[1] + Math.sin(a) * r)}; }
+        stroke(path, MotionEvent.TOOL_TYPE_FINGER, 1);
+        android.graphics.Matrix m = (android.graphics.Matrix) get(cv, "moveT");
+        float[] v = new float[9]; m.getValues(v);
+        assertEquals("rotated 90°", 90, Math.toDegrees(Math.atan2(v[3], v[0])), 3);
+        assertTrue(String.valueOf(((TextView) get(act, "hudView")).getText()).contains("°"));
+        cv.undo();
+        m.getValues(v);
+        assertEquals("one undo puts it back", 0, Math.toDegrees(Math.atan2(v[3], v[0])), 0.5);
+        // with Snapping: sticks to 15° steps
+        cv.snapping = true;
+        float[][] p2 = new float[8][];
+        for (int i = 0; i < 8; i++) { double a = -Math.PI / 2 + Math.toRadians(43) * i / 7; p2[i] = new float[]{(float) (c[0] + Math.cos(a) * r), (float) (c[1] + Math.sin(a) * r)}; }
+        stroke(p2, MotionEvent.TOOL_TYPE_FINGER, 1);
+        m.getValues(v);
+        assertEquals("snapped to 45°", 45, Math.toDegrees(Math.atan2(v[3], v[0])), 0.5);
+        cv.snapping = false;
+        call(act, "setTool", CanvasView.DRAW);
+    }
+
+    @Test public void colordrop_shows_a_dot_while_dragging() {
+        View cb = (View) get(act, "colorBtn"); int[] l = new int[2]; cb.getLocationOnScreen(l);
+        View d = act.getWindow().getDecorView();
+        float sx = l[0] + cb.getWidth() / 2f, sy = l[1] + cb.getHeight() / 2f;
+        t0 = android.os.SystemClock.uptimeMillis();
+        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0, MotionEvent.ACTION_DOWN, sx, sy, 0));
+        for (int i = 1; i <= 6; i++) d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + i * 10, MotionEvent.ACTION_MOVE, sx - i * 60, sy + i * 80, 0));
+        View ghost = (View) get(act, "cdGhost");
+        assertTrue("dot follows the finger", ghost != null && ghost.getVisibility() == View.VISIBLE);
+        settle(); shot("93_colordrop_dot");
+        d.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 100, MotionEvent.ACTION_UP, sx - 360, sy + 480, 0));
+        assertEquals(View.GONE, ghost.getVisibility());
+    }
 }

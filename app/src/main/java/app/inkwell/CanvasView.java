@@ -1298,6 +1298,19 @@ public class CanvasView extends View {
                 c.drawPath(box, g);
             }
             float hr = 8 * getResources().getDisplayMetrics().density;
+            float[] rh = rotHandle();
+            if (rh != null) { // rotation lever: a stick out of the top edge with a knob
+                g.setStyle(Paint.Style.STROKE);
+                g.setColor(0xFFFF9F0A);
+                g.setStrokeWidth(2f);
+                c.drawLine(rh[2], rh[3], rh[0], rh[1], g);
+                g.setStyle(Paint.Style.FILL);
+                c.drawCircle(rh[0], rh[1], hr * 1.15f, g);
+                g.setStyle(Paint.Style.STROKE);
+                g.setColor(Color.WHITE);
+                c.drawCircle(rh[0], rh[1], hr * 1.15f, g);
+                g.setStrokeWidth(1.5f);
+            }
             for (int k = 0; k < q.length / 2; k++) {
                 g.setStyle(Paint.Style.FILL);
                 g.setColor(xform == 0 ? Color.WHITE : 0xFF3D9BFF);
@@ -1799,6 +1812,7 @@ public class CanvasView extends View {
         }
         if (editGuide && guide >= 7 && e.getPointerCount() == 1 && !gesture) return vpTouch(e, action);
         if (tool == MOVE) {
+            if ((xform == 0 || xform == 1) && e.getPointerCount() == 1 && !gesture && rotHandleTouch(e, action)) return true;
             if (xform > 0 && e.getPointerCount() == 1 && !gesture && handleDrag(e, action)) return true;
             return handleGesture(e, action, moveT);
         }
@@ -2785,6 +2799,61 @@ public class CanvasView extends View {
         moveT.postScale(ds, ds, cc[0], cc[1]);
         moveT.postRotate(da, cc[0], cc[1]);
         magA = da; magS = ds;
+    }
+
+    // ---- Rotation lever (Uniform / Freeform), like Procreate's ----
+    private boolean rotDrag;
+    private float rotLast, rotWant, rotDone, rotBase;
+
+    /** Lever knob position {x, y} and where it meets the box {x, y}, in screen space; null when not shown. */
+    private float[] rotHandle() {
+        if (!(tool == MOVE && moving && (xform == 0 || xform == 1))) return null;
+        float[] q = handlePoints();
+        float mx = (q[0] + q[2]) / 2, my = (q[1] + q[3]) / 2, cx = (q[0] + q[4]) / 2, cy = (q[1] + q[5]) / 2;
+        float dx = mx - cx, dy = my - cy, len = (float) Math.hypot(dx, dy);
+        if (len < 1) return null;
+        float d = 36 * getResources().getDisplayMetrics().density;
+        return new float[]{mx + dx / len * d, my + dy / len * d, mx, my};
+    }
+
+    private boolean rotHandleTouch(MotionEvent e, int action) {
+        if (action == MotionEvent.ACTION_DOWN) {
+            float[] h = rotHandle();
+            if (h == null || Math.hypot(e.getX() - h[0], e.getY() - h[1]) > 28 * getResources().getDisplayMetrics().density) return false;
+            beginMove();
+            xfMark();
+            float[] c = contentCentre();
+            rotLast = (float) Math.toDegrees(Math.atan2(e.getY() - c[1], e.getX() - c[0]));
+            float[] v = new float[9];
+            moveT.getValues(v);
+            rotBase = (float) Math.toDegrees(Math.atan2(v[3], v[0]));
+            rotWant = rotDone = 0;
+            rotDrag = true;
+            return true;
+        }
+        if (!rotDrag) return false;
+        if (action == MotionEvent.ACTION_MOVE) {
+            float[] c = contentCentre();
+            float a = (float) Math.toDegrees(Math.atan2(e.getY() - c[1], e.getX() - c[0]));
+            float d = a - rotLast;
+            if (d > 180) d -= 360; else if (d < -180) d += 360;
+            rotLast = a;
+            rotWant += d;
+            float target = rotWant;
+            if (snapping) { // sticks to 15° steps when close
+                float abs = rotBase + rotWant, step = Math.round(abs / 15f) * 15f;
+                if (Math.abs(abs - step) < 4) target = step - rotBase;
+            }
+            moveT.postRotate(target - rotDone, c[0], c[1]);
+            rotDone = target;
+            float shown = ((rotBase + rotDone) % 360 + 540) % 360 - 180;
+            if (onInfo != null) onInfo.accept(Math.round(shown) + "°");
+            invalidate();
+            return true;
+        }
+        rotDrag = false; // up / cancel
+        xfUnmarkIfSame();
+        return true;
     }
 
     private float[] contentCentre() {
