@@ -363,6 +363,44 @@ public class ProcreateParityTest extends Base {
         prefs.edit().putInt("uiSize", 1).commit();
     }
 
+    @Test public void colordrop_threshold_hold_slide_and_slider() {
+        cv.size = 8;
+        line(W * .3f, H * .3f, W * .7f, H * .3f); line(W * .7f, H * .3f, W * .7f, H * .7f);
+        line(W * .7f, H * .7f, W * .3f, H * .7f); line(W * .3f, H * .7f, W * .3f, H * .3f);
+        long lines = inkSum(L());
+        View cb = (View) get(act, "colorBtn"); int[] l = new int[2]; cb.getLocationOnScreen(l);
+        int[] c = new int[2]; cv.getLocationOnScreen(c);
+        View d = act.getWindow().getDecorView();
+        t0 = android.os.SystemClock.uptimeMillis();
+        float sx = l[0] + cb.getWidth() / 2f, sy = l[1] + cb.getHeight() / 2f, ex = c[0] + W * .5f, ey = c[1] + H * .5f;
+        d.dispatchTouchEvent(evRaw(MotionEvent.ACTION_DOWN, sx, sy));
+        for (int i = 1; i <= 10; i++) { ShadowLooper.idleMainLooper(10, TimeUnit.MILLISECONDS); d.dispatchTouchEvent(evRaw(MotionEvent.ACTION_MOVE, sx + (ex - sx) * i / 10, sy + (ey - sy) * i / 10)); }
+        ShadowLooper.idleMainLooper(600, TimeUnit.MILLISECONDS); // hold: drops the fill
+        long held = inkSum(L());
+        assertTrue("hold drops the fill", held > lines * 3);
+        assertTrue(hudText().contains("threshold"));
+        int thr0 = cv.fillThreshold;
+        d.dispatchTouchEvent(evRaw(MotionEvent.ACTION_MOVE, ex + W * .2f, ey)); settle();
+        assertTrue("slide right raises the threshold", cv.fillThreshold > thr0);
+        d.dispatchTouchEvent(evRaw(MotionEvent.ACTION_UP, ex + W * .2f, ey)); settle();
+        cv.undo();
+        assertEquals("one undo step for the drop", lines, inkSum(L()));
+        cv.redo();
+        // slider: 0..100 %, each part of the range changes the result (not nothing-then-everything)
+        View bar = (View) get(act, "bottom");
+        android.widget.SeekBar sb = findSeek(bar);
+        assertEquals(100, sb.getMax());
+        java.util.TreeSet<Long> seen = new java.util.TreeSet<>();
+        for (int p = 0; p <= 70; p += 10) { sb.setProgress(p); settle(); seen.add(inkSum(L())); }
+        assertTrue("threshold steps change the fill: " + seen, seen.size() >= 5);
+    }
+
+    android.widget.SeekBar findSeek(View v) {
+        if (v instanceof android.widget.SeekBar) return (android.widget.SeekBar) v;
+        if (v instanceof android.view.ViewGroup) for (int i = 0; i < ((android.view.ViewGroup) v).getChildCount(); i++) { android.widget.SeekBar s = findSeek(((android.view.ViewGroup) v).getChildAt(i)); if (s != null) return s; }
+        return null;
+    }
+
     @Test public void finger_erases_after_stylus() {
         call(act, "setTool", CanvasView.ERASE);
         cv.size = 60;

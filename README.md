@@ -55,7 +55,8 @@ Layout matches Procreate so you can switch between the two easily:
 - **Brush cursor**: outline of the brush when a stylus hovers (Prefs).
 - **QuickShape**: line, ellipse or rectangle; after lifting, drag the blue handles to edit. Put a second finger down
   while holding to make a perfect circle / square or snap lines to 15°.
-- **ColorDrop**: after a fill, a bar shows Threshold (slide to refine) and Continue filling (each tap fills).
+- **ColorDrop**: drag the colour circle onto the canvas. Lift to fill, or **hold** to fill and then slide left/right to
+  change the threshold (shown in %). After a fill, a bar shows Threshold % and Continue filling (each tap fills).
 - **Selection**: Polygon (tap corners, tap the first corner to close), Automatic threshold slider, marching ants.
 - **Gallery**: Select → Stack / Unstack / Duplicate / Delete; drag to reorder; pinch out for full preview;
   tap a title to rename.

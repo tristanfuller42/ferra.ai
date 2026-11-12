@@ -352,6 +352,7 @@ public class CanvasView extends View {
     private Bitmap selOverlay;
     private Path selPath;
     private float selX0, selY0, autoSX;
+    private int autoBase; // threshold when the finger went down (sliding changes it from there)
     private int autoThr = 30;
     public java.util.function.Consumer<String> onInfo;
 
@@ -2388,12 +2389,15 @@ public class CanvasView extends View {
 
     /** Automatic selection: redo the last one with a new threshold. */
     public void refineAuto(int thr) {
+        if (thr == autoThr && lastAutoEdit != null) return;
         autoThr = thr;
         if (lastAutoEdit == null || undoList.isEmpty() || undoList.get(undoList.size() - 1) != lastAutoEdit) return;
         undoList.remove(undoList.size() - 1);
         sel = lastAutoBefore == null ? null : lastAutoBefore.clone();
         byte[] m = new byte[docW * docH];
-        Fx.flood(boundaryPixels(), docW, docH, lastAutoX, lastAutoY, autoThr, m);
+        int[] bnd = boundaryPixels();
+        Fx.flood(bnd, docW, docH, lastAutoX, lastAutoY, autoThr, m);
+        Fx.softGrow(bnd, m, docW, docH, bnd[lastAutoY * docW + lastAutoX], autoThr, 2);
         combineSel(m);
         lastAutoEdit = undoList.get(undoList.size() - 1);
     }
@@ -2406,7 +2410,7 @@ public class CanvasView extends View {
         float x = pt[0], y = pt[1];
         switch (action) {
             case MotionEvent.ACTION_DOWN:
-                selX0 = x; selY0 = y; autoSX = e.getX();
+                selX0 = x; selY0 = y; autoSX = e.getX(); autoBase = autoThr;
                 selDownSX = e.getX(); selDownSY = e.getY();
                 selMoved = false;
                 if (selKind == 1 && polyOpen && selPath != null) { selPath.lineTo(x, y); invalidate(); break; } // continue the polygon
@@ -2419,7 +2423,7 @@ public class CanvasView extends View {
                 if (selPath == null) break;
                 if (Math.hypot(e.getX() - selDownSX, e.getY() - selDownSY) > 10 * getResources().getDisplayMetrics().density) selMoved = true;
                 if (selKind == 0) {
-                    autoThr = Fx.clamp(30 + Math.round((e.getX() - autoSX) / getWidth() * 255));
+                    autoThr = Fx.clamp(autoBase + Math.round((e.getX() - autoSX) / getWidth() * 255));
                     if (onInfo != null) onInfo.accept("Threshold " + autoThr * 100 / 255 + "%  (slide left/right)");
                 } else if (selKind == 1) selPath.lineTo(x, y);
                 else {
@@ -2442,7 +2446,9 @@ public class CanvasView extends View {
                     int sx = (int) selX0, sy = (int) selY0;
                     if (sx < 0 || sy < 0 || sx >= docW || sy >= docH) { selPath = null; invalidate(); break; }
                     m = new byte[docW * docH];
-                    Fx.flood(boundaryPixels(), docW, docH, sx, sy, autoThr, m);
+                    int[] bnd = boundaryPixels();
+                    Fx.flood(bnd, docW, docH, sx, sy, autoThr, m);
+                    Fx.softGrow(bnd, m, docW, docH, bnd[sy * docW + sx], autoThr, 2);
                     lastAutoX = sx; lastAutoY = sy;
                     lastAutoBefore = sel == null ? null : sel.clone();
                     selPath = null;
@@ -2602,8 +2608,9 @@ public class CanvasView extends View {
         int[] px = new int[n];
         l.bmp.getPixels(px, 0, docW, 0, 0, docW, docH);
         byte[] m = new byte[n];
-        Fx.flood(boundaryPixels(), docW, docH, x, y, threshold, m);
-        Fx.dilate(m, docW, docH);
+        int[] bnd = boundaryPixels();
+        Fx.flood(bnd, docW, docH, x, y, threshold, m);
+        Fx.softGrow(bnd, m, docW, docH, bnd[y * docW + x], threshold, 2);
         named("ColorDrop");
         PixelEdit pe = new PixelEdit(l, new Rect(0, 0, docW, docH));
         push(pe);

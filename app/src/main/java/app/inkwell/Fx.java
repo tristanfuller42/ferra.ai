@@ -288,17 +288,34 @@ final class Fx {
         return Math.abs(a - a0) <= thr * 2 && Math.abs(ga - ga0) <= thr;
     }
 
-    /** Grows a 0/255 mask by one pixel (so fills tuck under anti-aliased line edges). */
-    static void dilate(byte[] m, int w, int h) {
-        byte[] c = m.clone();
-        for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++) {
-                if (c[y * w + x] != 0) continue;
-                if ((x > 0 && c[y * w + x - 1] != 0) || (x < w - 1 && c[y * w + x + 1] != 0)
-                        || (y > 0 && c[(y - 1) * w + x] != 0) || (y < h - 1 && c[(y + 1) * w + x] != 0))
-                    m[y * w + x] = (byte) 255;
-            }
+    /** How different a pixel is from the seed (0..255), the same measure flood() compares with its threshold. */
+    static int diff(int p, int a0, int ga0) {
+        int a = p >>> 24, ga = (p & 255) * a / 255 + (255 - a);
+        return Math.max(Math.abs(a - a0) / 2, Math.abs(ga - ga0));
     }
+
+    /**
+     * Soft fill edge: grows the mask into neighbouring pixels (line edges) with partial coverage that rises with the
+     * threshold, so every threshold step changes the edge a little instead of nothing-then-everything.
+     */
+    static void softGrow(int[] px, byte[] m, int w, int h, int seed, int thr, int rings) {
+        int a0 = seed >>> 24, ga0 = (seed & 255) * a0 / 255 + (255 - a0);
+        for (int r = 0; r < rings; r++) {
+            byte[] c = m.clone();
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    int i = y * w + x;
+                    if (c[i] != 0) continue;
+                    int nb = Math.max(Math.max(x > 0 ? c[i - 1] & 255 : 0, x < w - 1 ? c[i + 1] & 255 : 0),
+                            Math.max(y > 0 ? c[i - w] & 255 : 0, y < h - 1 ? c[i + w] & 255 : 0));
+                    if (nb == 0) continue;
+                    int cov = (thr + 96 - diff(px[i], a0, ga0)) * 255 / 96; // fades out over 96 grey levels past the threshold
+                    cov = Math.min(nb, Math.max(0, Math.min(255, cov)));
+                    if (cov > 0) m[i] = (byte) cov;
+                }
+        }
+    }
+
 
     /** Softens a mask edge. */
     static void feather(byte[] m, int w, int h, float radius) {

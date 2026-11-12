@@ -620,7 +620,7 @@ public class MainActivity extends Activity {
         chip(b, "Save", false, v -> saveSelection());
         chip(b, "Load", false, this::loadSelectionMenu);
         chip(a, "Done", true, v -> { canvas.closePolygon(); setTool(CanvasView.DRAW); });
-        if (canvas.selKind == 0) showBar(a, b, slider("Threshold", canvas.autoThreshold(), 0, 255, v -> canvas.refineAuto(v)));
+        if (canvas.selKind == 0) showBar(a, b, slider("Threshold %", pct(canvas.autoThreshold()), 0, 100, v -> setAutoThreshold(Math.round(v * 2.55f))));
         else showBar(a, b);
     }
 
@@ -854,16 +854,65 @@ public class MainActivity extends Activity {
 
     // ---------- ColorDrop: drag the colour circle onto the canvas to fill ----------
 
-    private float cdX, cdY;
-    private boolean cdDrag;
+    private float cdX, cdY, cdHoldX;
+    private boolean cdDrag, cdHeld;
+    private int cdBaseThr;
+    private final Runnable cdHold = () -> { // finger rests on the canvas: drop now, then slide to set the threshold
+        int[] loc = new int[2];
+        canvas.getLocationOnScreen(loc);
+        float x = cdX - loc[0], y = cdY - loc[1];
+        if (x < 0 || y < 0 || x > canvas.getWidth() || y > canvas.getHeight()) return;
+        canvas.colorDrop(x, y, canvas.fillThreshold);
+        cdHeld = true; cdHoldX = cdX; cdBaseThr = canvas.fillThreshold;
+        hud("ColorDrop threshold " + pct(canvas.fillThreshold) + "% · slide left/right");
+    };
+
+    private static int pct(int thr) { return Math.round(thr * 100 / 255f); }
+
+    /** Refills with a new threshold, at most once per frame (each refill scans the whole canvas). */
+    private int pendingThr = -1;
+    private final Runnable refill = () -> {
+        if (pendingThr >= 0) { canvas.refineFill(pendingThr); canvas.fillThreshold = pendingThr; pendingThr = -1; }
+    };
+    private int pendingAuto = -1;
+    private final Runnable reselect = () -> { if (pendingAuto >= 0) { canvas.refineAuto(pendingAuto); pendingAuto = -1; } };
+    private void setAutoThreshold(int thr) {
+        boolean idle = pendingAuto < 0;
+        pendingAuto = Math.max(0, Math.min(255, thr));
+        if (idle) canvas.postOnAnimation(reselect);
+    }
+    private void setFillThreshold(int thr) {
+        thr = Math.max(0, Math.min(255, thr));
+        if (thr == canvas.fillThreshold && pendingThr < 0) return;
+        boolean idle = pendingThr < 0;
+        pendingThr = thr;
+        if (idle) canvas.postOnAnimation(refill);
+    }
 
     private boolean colorDropTouch(View v, android.view.MotionEvent e) {
         switch (e.getActionMasked()) {
-            case android.view.MotionEvent.ACTION_DOWN: cdX = e.getRawX(); cdY = e.getRawY(); cdDrag = false; break;
+            case android.view.MotionEvent.ACTION_DOWN:
+                cdX = e.getRawX(); cdY = e.getRawY(); cdDrag = cdHeld = false;
+                break;
             case android.view.MotionEvent.ACTION_MOVE:
+                if (cdHeld) { // like Procreate: slide sideways to change the threshold
+                    int thr = cdBaseThr + Math.round((e.getRawX() - cdHoldX) / (canvas.getWidth() * 0.6f) * 255);
+                    thr = Math.max(0, Math.min(255, thr));
+                    setFillThreshold(thr);
+                    hud("ColorDrop threshold " + pct(thr) + "%");
+                    return true;
+                }
                 if (Math.hypot(e.getRawX() - cdX, e.getRawY() - cdY) > 24 * dp) cdDrag = true;
+                if (cdDrag && Math.hypot(e.getRawX() - cdX, e.getRawY() - cdY) > 6 * dp) { // still moving: restart the hold timer
+                    cdX = e.getRawX(); cdY = e.getRawY();
+                    v.removeCallbacks(cdHold);
+                    v.postDelayed(cdHold, 450);
+                }
+                if (cdDrag) return true;
                 break;
             case android.view.MotionEvent.ACTION_UP:
+                v.removeCallbacks(cdHold);
+                if (cdHeld) { cdHeld = false; showFillBar(); return true; }
                 if (cdDrag) {
                     int[] loc = new int[2];
                     canvas.getLocationOnScreen(loc);
@@ -871,6 +920,10 @@ public class MainActivity extends Activity {
                     showFillBar();
                     return true;
                 }
+                break;
+            case android.view.MotionEvent.ACTION_CANCEL:
+                v.removeCallbacks(cdHold);
+                cdHeld = false;
                 break;
         }
         return false; // let taps through to the colour picker
@@ -886,7 +939,7 @@ public class MainActivity extends Activity {
         cont.setOnCheckedChangeListener((b, on) -> { canvas.fillMode = on; if (on) hud("Tap areas to fill them"); });
         a.addView(cont);
         chip(a, "Done", true, v -> { canvas.fillMode = false; bottom.setVisibility(View.GONE); });
-        showBar(slider("ColorDrop threshold", canvas.fillThreshold, 0, 255, v -> canvas.refineFill(v)), a);
+        showBar(slider("Threshold %", pct(canvas.fillThreshold), 0, 100, v -> setFillThreshold(Math.round(v * 2.55f))), a);
     }
 
     // ---------- Layer options (tap the selected layer) ----------
