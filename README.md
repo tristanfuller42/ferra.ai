@@ -1,2 +1,2 @@
-# ferra.ai
-AI Web Development Companion
+# inkwell
+Mobile sketchbook
