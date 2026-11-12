@@ -105,6 +105,64 @@ public class CanvasView extends View {
     public static final class Brush {
         public String name;
         float minSize, minAlpha, alpha, hard, grain, spacing;
+        // Brush Studio settings (Procreate-style)
+        public String set = "Imported";
+        float streamline, stabilize;          // smoothing 0..1
+        float taperStart, taperEnd;           // 0..1 (length relative to brush size)
+        float jitterSize, jitterOpacity, scatter;
+        float roundness = 1f, angle;          // dab shape; angle in degrees
+        boolean follow;                       // rotate the dab with the stroke direction
+        float grainScale = 1f;                // texture size multiplier
+        float curve = 1f;                     // pressure curve: <1 = light touch gives more, >1 = needs more pressure
+        float sizeScale = 1f;                 // maximum size relative to the size slider
+        public boolean builtin;
+
+        /** All adjustable settings as named values (used by Brush Studio, saving, reset). */
+        static final String[] KEYS = {"spacing", "streamline", "stabilize", "taperStart", "taperEnd", "jitterSize",
+                "jitterOpacity", "scatter", "hard", "roundness", "angle", "follow", "grain", "grainScale",
+                "minSize", "minAlpha", "curve", "alpha", "sizeScale"};
+
+        float get(String k) {
+            switch (k) {
+                case "spacing": return spacing; case "streamline": return streamline; case "stabilize": return stabilize;
+                case "taperStart": return taperStart; case "taperEnd": return taperEnd; case "jitterSize": return jitterSize;
+                case "jitterOpacity": return jitterOpacity; case "scatter": return scatter; case "hard": return hard;
+                case "roundness": return roundness; case "angle": return angle; case "follow": return follow ? 1 : 0;
+                case "grain": return grain; case "grainScale": return grainScale; case "minSize": return minSize;
+                case "minAlpha": return minAlpha; case "curve": return curve; case "alpha": return alpha;
+                case "sizeScale": return sizeScale;
+            }
+            return 0;
+        }
+
+        void put(String k, float v) {
+            switch (k) {
+                case "spacing": spacing = v; break; case "streamline": streamline = v; break; case "stabilize": stabilize = v; break;
+                case "taperStart": taperStart = v; break; case "taperEnd": taperEnd = v; break; case "jitterSize": jitterSize = v; break;
+                case "jitterOpacity": jitterOpacity = v; break; case "scatter": scatter = v; break; case "hard": hard = v; break;
+                case "roundness": roundness = v; break; case "angle": angle = v; break; case "follow": follow = v >= 0.5f; break;
+                case "grain": grain = v; break; case "grainScale": grainScale = v; break; case "minSize": minSize = v; break;
+                case "minAlpha": minAlpha = v; break; case "curve": curve = v; break; case "alpha": alpha = v; break;
+                case "sizeScale": sizeScale = v; break;
+            }
+        }
+
+        float[] values() { float[] v = new float[KEYS.length]; for (int i = 0; i < v.length; i++) v[i] = get(KEYS[i]); return v; }
+        void setValues(float[] v) { for (int i = 0; i < Math.min(v.length, KEYS.length); i++) put(KEYS[i], v[i]); }
+
+        /** A copy for "Duplicate brush" (shares the tip/texture images). */
+        Brush copy(String newName) {
+            Brush b = new Brush(newName, minSize, minAlpha, alpha, hard, grain, spacing);
+            b.setValues(values());
+            b.set = set; b.tip = tip; b.tw = tw; b.th = th; b.tex = tex; b.gw = gw; b.gh = gh;
+            return b;
+        }
+
+        Brush with(String set, float streamline, float taperStart, float taperEnd) {
+            this.set = set; this.streamline = streamline; this.taperStart = taperStart; this.taperEnd = taperEnd;
+            builtin = true;
+            return this;
+        }
         /** Optional tip image (0..255 = paint amount) as a mip chain, and grain texture. */
         byte[][] tip; int[] tw, th;
         byte[] tex; int gw, gh;
@@ -138,17 +196,17 @@ public class CanvasView extends View {
 
     public static final ArrayList<Brush> BRUSHES = new ArrayList<>(java.util.Arrays.asList(
         //          name            minSize minAlpha alpha hard  grain spacing
-        new Brush("Ink pen",        0.15f, 1f,    1f,   0.9f, 0f,    0.08f),
-        new Brush("Brush pen",      0.03f, 1f,    1f,   0.85f, 0f,   0.05f),
-        new Brush("Fine liner",     1f,    1f,    1f,   0.9f, 0f,    0.08f),
-        new Brush("Dry ink",        0.3f,  0.6f,  1f,   0.8f, 0.5f,  0.1f),
-        new Brush("Marker",         1f,    1f,    0.5f, 0.95f, 0f,   0.08f),
-        new Brush("HB pencil",      0.7f,  0.15f, 0.9f, 0.7f, 0.6f,  0.1f),
-        new Brush("6B pencil",      0.6f,  0.25f, 1f,   0.6f, 0.75f, 0.1f),
-        new Brush("Charcoal",       0.6f,  0.2f,  1f,   0.4f, 0.85f, 0.1f),
-        new Brush("Soft shading",   0.5f,  0.05f, 0.8f, 0f,   0f,    0.1f),
-        new Brush("Airbrush",       1f,    0.02f, 0.6f, 0f,   0f,    0.1f),
-        new Brush("Hard round",     1f,    0.1f,  1f,   0.9f, 0f,    0.08f)
+        new Brush("Ink pen",        0.15f, 1f,    1f,   0.9f, 0f,    0.08f).with("Inking", 0.35f, 0.15f, 0.15f),
+        new Brush("Brush pen",      0.03f, 1f,    1f,   0.85f, 0f,   0.05f).with("Inking", 0.45f, 0.3f, 0.3f),
+        new Brush("Fine liner",     1f,    1f,    1f,   0.9f, 0f,    0.08f).with("Inking", 0.3f, 0f, 0f),
+        new Brush("Dry ink",        0.3f,  0.6f,  1f,   0.8f, 0.5f,  0.1f).with("Inking", 0.2f, 0.1f, 0.1f),
+        new Brush("Marker",         1f,    1f,    0.5f, 0.95f, 0f,   0.08f).with("Inking", 0.2f, 0f, 0f),
+        new Brush("HB pencil",      0.7f,  0.15f, 0.9f, 0.7f, 0.6f,  0.1f).with("Sketching", 0f, 0f, 0f),
+        new Brush("6B pencil",      0.6f,  0.25f, 1f,   0.6f, 0.75f, 0.1f).with("Sketching", 0f, 0f, 0f),
+        new Brush("Charcoal",       0.6f,  0.2f,  1f,   0.4f, 0.85f, 0.1f).with("Sketching", 0f, 0f, 0f),
+        new Brush("Soft shading",   0.5f,  0.05f, 0.8f, 0f,   0f,    0.1f).with("Airbrushing", 0f, 0f, 0f),
+        new Brush("Airbrush",       1f,    0.02f, 0.6f, 0f,   0f,    0.1f).with("Airbrushing", 0f, 0f, 0f),
+        new Brush("Hard round",     1f,    0.1f,  1f,   0.9f, 0f,    0.08f).with("Airbrushing", 0f, 0f, 0f)
     ));
 
     /** 128x128 tileable paper grain, 0..255. */
@@ -167,6 +225,12 @@ public class CanvasView extends View {
             NOISE[i] = (byte) (v * 255);
         }
     }
+
+    /** Factory settings of the built-in brushes, for "Reset brush". */
+    public static final java.util.HashMap<String, float[]> DEFAULTS = new java.util.HashMap<>();
+    static { for (Brush b : BRUSHES) DEFAULTS.put(b.name, b.values()); }
+
+    public static final String[] SETS = {"Inking", "Sketching", "Airbrushing", "Imported"};
 
     public Brush brush = BRUSHES.get(0);
     public float opacity = 1f;
@@ -356,6 +420,12 @@ public class CanvasView extends View {
     }
 
     /** Smoothly fits the canvas to the screen (quick pinch-in, Fit button). */
+    /** Flips the view (not the pixels), like Procreate's Flip canvas. */
+    public void flipView(boolean horizontal) {
+        view.postScale(horizontal ? -1 : 1, horizontal ? 1 : -1, getWidth() / 2f, getHeight() / 2f);
+        invalidate();
+    }
+
     public void animateFit() {
         if (docW == 0) return;
         float[] a = new float[9], b = new float[9], c = new float[9];
@@ -738,6 +808,7 @@ public class CanvasView extends View {
 
     private void startAt(float x, float y, float p) {
         lx = x; ly = y; lp = p;
+        arc = 0; dabArc = 0;
         stamp(x, y, p);
         nextDab = step(p);
     }
@@ -846,6 +917,8 @@ public class CanvasView extends View {
                 if (cloning && !cloneOffSet) { cloneOX = cloneSrcX - pt[0]; cloneOY = cloneSrcY - pt[1]; cloneOffSet = true; }
                 smX = pt[0]; smY = pt[1];
                 addPt(pt[0], pt[1], e.getPressure());
+                smoothReset(pt[0], pt[1]);
+                record(pt[0], pt[1], e.getPressure());
                 startAt(pt[0], pt[1], e.getPressure());
                 flush();
                 if (!isPen) postDelayed(pickHold, 450);
@@ -863,12 +936,10 @@ public class CanvasView extends View {
                 }
                 for (int i = 0; i < e.getHistorySize(); i++) {
                     map(e.getHistoricalX(i), e.getHistoricalY(i));
-                    addPt(pt[0], pt[1], e.getHistoricalPressure(i));
-                    segmentTo(pt[0], pt[1], e.getHistoricalPressure(i));
+                    feed(e.getHistoricalPressure(i));
                 }
                 map(e.getX(), e.getY());
-                addPt(pt[0], pt[1], e.getPressure());
-                segmentTo(pt[0], pt[1], e.getPressure());
+                feed(e.getPressure());
                 flush();
                 if (Math.hypot(e.getX() - holdSX, e.getY() - holdSY) > 6) {
                     holdSX = e.getX(); holdSY = e.getY();
@@ -881,7 +952,10 @@ public class CanvasView extends View {
                 removeCallbacks(pickHold);
                 removeCallbacks(shapeHold);
                 if (picking) picking = false;
-                else if (stroking) commitStroke();
+                else if (stroking) {
+                    if (!shaping) finishSmoothing(e);
+                    commitStroke();
+                }
                 shaping = false;
                 break;
             case MotionEvent.ACTION_CANCEL:
@@ -950,10 +1024,104 @@ public class CanvasView extends View {
     // Each stroke stamps round "dabs" into a coverage mask (max, so overlaps don't darken),
     // then the mask is composited onto the layer's pre-stroke pixels with the ink grey.
 
-    private float pres(float p) { return penInput ? Math.max(0f, Math.min(p, 1f)) : 1f; }
+    private float pres(float p) {
+        if (!penInput) return 1f;
+        float q = Math.max(0f, Math.min(p, 1f));
+        return brush.curve == 1f ? q : (float) Math.pow(q, brush.curve); // pressure curve
+    }
 
     private float diameter(float p) {
-        return Math.max(1f, size * (brush.minSize + (1 - brush.minSize) * pres(p)));
+        return Math.max(1f, size * brush.sizeScale * (brush.minSize + (1 - brush.minSize) * pres(p)));
+    }
+
+    // Smoothing (StreamLine + Stabilization), taper, jitter state for the current stroke
+    private float smoX, smoY, arc, dabArc, replayLen, strokeAng;
+    private final float[] stabX = new float[24], stabY = new float[24];
+    private int stabN, stabI;
+    private long strokeSeed;
+    private java.util.Random rnd = new java.util.Random();
+    private float[] rec = new float[300];
+    private int recN;
+
+    private void smoothReset(float x, float y) {
+        smoX = x; smoY = y; stabN = 0; stabI = 0; arc = 0; recN = 0;
+        strokeSeed = System.nanoTime();
+        rnd = new java.util.Random(strokeSeed);
+    }
+
+    /** Returns the smoothed position for a new input point (in pt[]). */
+    private void smooth(float x, float y) {
+        Brush b = brush;
+        int n = Math.round(b.stabilize * 16);
+        if (n > 1) { // stabilization: average of the last n points
+            stabX[stabI] = x; stabY[stabI] = y;
+            stabI = (stabI + 1) % Math.min(n, stabX.length);
+            stabN = Math.min(stabN + 1, Math.min(n, stabX.length));
+            float sx = 0, sy = 0;
+            for (int i = 0; i < stabN; i++) { sx += stabX[i]; sy += stabY[i]; }
+            x = sx / stabN; y = sy / stabN;
+        }
+        float k = 1 - 0.92f * b.streamline; // streamline: the line follows the pen with a pull
+        smoX += (x - smoX) * k;
+        smoY += (y - smoY) * k;
+        pt[0] = smoX; pt[1] = smoY;
+    }
+
+    /** Raw point in pt[] -> QuickShape record, smoothing, then the brush. */
+    private void feed(float p) {
+        addPt(pt[0], pt[1], p);
+        lastRawX = pt[0]; lastRawY = pt[1]; lastP = p;
+        smooth(pt[0], pt[1]);
+        record(pt[0], pt[1], p);
+        segmentTo(pt[0], pt[1], p);
+    }
+
+    private float lastRawX, lastRawY, lastP;
+
+    /** At pen lift: let the smoothed line catch up to where the pen ended, then apply the end taper. */
+    private void finishSmoothing(MotionEvent e) {
+        if (recN >= 3 && (brush.streamline > 0 || brush.stabilize > 0)) {
+            float tx = lastRawX, ty = lastRawY;
+            float sx = rec[recN - 3], sy = rec[recN - 2];
+            int steps = 6;
+            for (int i = 1; i <= steps; i++) {
+                float t = i / (float) steps;
+                float x = sx + (tx - sx) * t, y = sy + (ty - sy) * t;
+                record(x, y, lastP);
+                segmentTo(x, y, lastP);
+            }
+        }
+        flush();
+        if (brush.taperEnd > 0) replayWithTaper();
+    }
+
+    private void record(float x, float y, float p) {
+        if (recN + 3 > rec.length) rec = java.util.Arrays.copyOf(rec, rec.length * 2);
+        rec[recN++] = x; rec[recN++] = y; rec[recN++] = p;
+    }
+
+    /** Size multiplier from start/end taper at the current dab. */
+    private float taper() {
+        Brush b = brush;
+        float m = 1f;
+        if (b.taperStart > 0) m = Math.min(m, dabArc / (b.taperStart * size * 8 + 1));
+        if (b.taperEnd > 0 && replayLen > 0) m = Math.min(m, (replayLen - dabArc) / (b.taperEnd * size * 8 + 1));
+        return Math.max(0.06f, Math.min(1f, m));
+    }
+
+    /** Redraws the recorded (smoothed) stroke so the end taper can be applied. */
+    private void replayWithTaper() {
+        if (recN < 6) return;
+        float total = 0;
+        for (int i = 3; i < recN; i += 3) total += (float) Math.hypot(rec[i] - rec[i - 3], rec[i + 1] - rec[i - 2]);
+        restoreStroke();
+        rnd = new java.util.Random(strokeSeed);
+        replayLen = total;
+        arc = 0;
+        startAt(rec[0], rec[1], rec[2]);
+        for (int i = 3; i < recN; i += 3) segmentTo(rec[i], rec[i + 1], rec[i + 2]);
+        flush();
+        replayLen = 0;
     }
 
     private float step(float p) { return Math.max(0.5f, diameter(p) * brush.spacing); }
@@ -962,13 +1130,16 @@ public class CanvasView extends View {
         float dx = x - lx, dy = y - ly;
         float d = (float) Math.hypot(dx, dy);
         if (d < 0.01f) { lp = p; return; }
+        strokeAng = (float) Math.toDegrees(Math.atan2(dy, dx));
         while (nextDab <= d) {
             float t = nextDab / d;
             float q = lp + (p - lp) * t;
+            dabArc = arc + nextDab;
             stamp(lx + dx * t, ly + dy * t, q);
             nextDab += step(q);
         }
         nextDab -= d;
+        arc += d;
         lx = x; ly = y; lp = p;
     }
 
@@ -992,9 +1163,16 @@ public class CanvasView extends View {
 
     private void stampOne(float cx, float cy, float p) {
         Brush b = brush;
-        float r = diameter(p) / 2f;
+        float r = diameter(p) / 2f * taper();
+        if (b.jitterSize > 0) r *= 1 - b.jitterSize * rnd.nextFloat();
+        if (b.scatter > 0) { // random offset around the stroke
+            double ang = rnd.nextDouble() * Math.PI * 2, dist = rnd.nextDouble() * b.scatter * r * 4;
+            cx += (float) (Math.cos(ang) * dist); cy += (float) (Math.sin(ang) * dist);
+        }
+        r = Math.max(0.5f, r);
         float pr = pres(p);
-        int a = (int) (255 * opacity * b.alpha * (b.minAlpha + (1 - b.minAlpha) * pr));
+        float alphaJ = b.jitterOpacity > 0 ? 1 - b.jitterOpacity * rnd.nextFloat() : 1f;
+        int a = (int) (255 * opacity * b.alpha * alphaJ * (b.minAlpha + (1 - b.minAlpha) * pr));
         if (a <= 0) return;
         float soft = Math.max(1f, r * (1 - b.hard));
         int x0 = Math.max(0, (int) (cx - r - 1)), x1 = Math.min(docW - 1, (int) (cx + r + 1));
@@ -1006,6 +1184,11 @@ public class CanvasView extends View {
             java.util.Arrays.fill(dab, 0, bw * bh, 0);
         }
         float grain = b.grain;
+        float gsc = 1f / Math.max(0.1f, b.grainScale);
+        // Dab shape: roundness squashes, angle (optionally following the stroke) rotates
+        boolean shaped = b.roundness < 0.999f || b.angle != 0 || b.follow;
+        double ang = Math.toRadians(b.angle + (b.follow ? strokeAng : 0));
+        float ca = (float) Math.cos(ang), sa = (float) Math.sin(ang), inv = 1f / Math.max(0.05f, b.roundness);
         // Tip image: pick the mip level closest to the stamp size
         byte[] tip = null; int tw = 0, th = 0; float sc = 0, ox = 0, oy = 0;
         if (b.tip != null) {
@@ -1020,19 +1203,22 @@ public class CanvasView extends View {
             int row = y * docW;
             for (int x = x0; x <= x1; x++) {
                 float fx = x + 0.5f - cx;
+                float fyy = fy;
+                if (shaped) { float u = fx * ca + fy * sa, v = (-fx * sa + fy * ca) * inv; fx = u; fyy = v; }
                 float c;
                 if (tip != null) {
-                    c = sample(tip, tw, th, fx * sc + ox, fy * sc + oy) / 255f;
+                    c = sample(tip, tw, th, fx * sc + ox, fyy * sc + oy) / 255f;
                 } else {
-                    float dist = (float) Math.sqrt(fx * fx + fy * fy);
+                    float dist = (float) Math.sqrt(fx * fx + fyy * fyy);
                     c = (r - dist) / soft + (b.hard > 0.5f ? 0.5f : 0f);
                     if (c > 1) c = 1;
                     else if (c > 0 && b.hard <= 0.5f) c = c * c * (3 - 2 * c);
                 }
                 if (c <= 0) continue;
                 if (grain > 0) {
-                    int g = b.tex != null ? b.tex[(y % b.gh) * b.gw + (x % b.gw)] & 255
-                                          : NOISE[((y & 127) << 7) | (x & 127)] & 255;
+                    int gx = (int) (x * gsc), gy = (int) (y * gsc);
+                    int g = b.tex != null ? b.tex[(gy % b.gh) * b.gw + (gx % b.gw)] & 255
+                                          : NOISE[((gy & 127) << 7) | (gx & 127)] & 255;
                     c *= 1 - grain + grain * g / 255f;
                 }
                 int v = (int) (a * c);
@@ -2303,9 +2489,11 @@ public class CanvasView extends View {
         for (int i = 0; i <= n; i++) {
             float t = i / (float) n;
             float x = w * (0.06f + 0.88f * t), y = h * (0.5f + 0.22f * (float) Math.sin(t * Math.PI * 2));
-            float p = (float) Math.sin(t * Math.PI);
-            if (i == 0) v.startAt(x, y, p); else v.segmentTo(x, y, p);
+            float p = 0.25f + 0.75f * (float) Math.sin(t * Math.PI);
+            if (i == 0) { v.smoothReset(x, y); v.addPt(x, y, p); v.record(x, y, p); v.startAt(x, y, p); }
+            else { v.pt[0] = x; v.pt[1] = y; v.feed(p); }
         }
+        v.finishSmoothing(null);
         v.flush();
         v.stroking = false;
         return v.cur().bmp;

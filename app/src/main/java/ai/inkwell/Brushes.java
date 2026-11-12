@@ -276,7 +276,7 @@ final class Brushes {
 
     static void save(CanvasView.Brush b, File f) throws IOException {
         try (DataOutputStream o = new DataOutputStream(new java.util.zip.DeflaterOutputStream(new FileOutputStream(f)))) {
-            o.writeInt(1);
+            o.writeInt(2);
             o.writeUTF(b.name);
             o.writeFloat(b.minSize); o.writeFloat(b.minAlpha); o.writeFloat(b.alpha);
             o.writeFloat(b.hard); o.writeFloat(b.grain); o.writeFloat(b.spacing);
@@ -284,19 +284,31 @@ final class Brushes {
             if (b.tip != null) o.write(b.tip[0]);
             o.writeInt(b.tex == null ? 0 : b.gw); o.writeInt(b.tex == null ? 0 : b.gh);
             if (b.tex != null) o.write(b.tex);
+            // version 2: Brush Studio settings
+            o.writeUTF(b.set);
+            o.writeBoolean(b.builtin);
+            o.writeInt(CanvasView.Brush.KEYS.length);
+            for (String k : CanvasView.Brush.KEYS) { o.writeUTF(k); o.writeFloat(b.get(k)); }
         }
         b.file = f;
     }
 
     static CanvasView.Brush load(File f) throws IOException {
         try (DataInputStream in = new DataInputStream(new java.util.zip.InflaterInputStream(new FileInputStream(f)))) {
-            if (in.readInt() != 1) throw new IOException("bad version");
+            int ver = in.readInt();
+            if (ver != 1 && ver != 2) throw new IOException("bad version");
             CanvasView.Brush b = new CanvasView.Brush(in.readUTF(), in.readFloat(), in.readFloat(), in.readFloat(),
                     in.readFloat(), in.readFloat(), in.readFloat());
             int w = in.readInt(), h = in.readInt();
             if (w > 0) { byte[] t = new byte[w * h]; in.readFully(t); b.setTip(t, w, h); }
             w = in.readInt(); h = in.readInt();
             if (w > 0) { b.tex = new byte[w * h]; in.readFully(b.tex); b.gw = w; b.gh = h; }
+            if (ver >= 2) {
+                b.set = in.readUTF();
+                b.builtin = in.readBoolean();
+                int n = in.readInt();
+                for (int i = 0; i < n; i++) { String k = in.readUTF(); b.put(k, in.readFloat()); }
+            }
             b.file = f;
             return b;
         }

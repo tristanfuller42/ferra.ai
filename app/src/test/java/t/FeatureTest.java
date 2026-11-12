@@ -388,4 +388,86 @@ public class FeatureTest extends Base {
         float v = (Float) get(slider, "value");
         assertEquals(msg, (float) Math.sqrt((size - 1) / 149f), v, 0.01f);
     }
+
+    CanvasView.Brush named(String n) { for (CanvasView.Brush b : CanvasView.BRUSHES) if (b.name.equals(n)) return b; return null; }
+
+    long offLine(Bitmap b, float yScreen) { // ink farther than 12 px from the intended line
+        int[] p = toDoc(0, yScreen);
+        long s = 0;
+        for (int y = 0; y < b.getHeight(); y++) if (Math.abs(y - p[1]) > 12) for (int x = 0; x < b.getWidth(); x++) s += b.getPixel(x, y) >>> 24;
+        return s;
+    }
+
+    @Test public void streamline_smooths_and_taper_thins() {
+        CanvasView.Brush fl = named("Fine liner");
+        cv.brush = fl; cv.size = 6;
+        float[] before = (float[]) call(fl, "values");
+        float[][] zig = new float[41][];
+        for (int i = 0; i <= 40; i++) zig[i] = new float[]{W * (.2f + .6f * i / 40), H * .5f + ((i % 2 == 0) ? -14 : 14)};
+        call(fl, "put", "streamline", 0f);
+        stroke(zig, MotionEvent.TOOL_TYPE_STYLUS, 1);
+        long rough = offLine(L(), H * .5f);
+        cv.clearLayer();
+        call(fl, "put", "streamline", 1f);
+        stroke(zig, MotionEvent.TOOL_TYPE_STYLUS, 1);
+        long smooth = offLine(L(), H * .5f);
+        assertTrue("StreamLine smooths the zigzag: " + rough + " -> " + smooth, smooth < rough * 0.6);
+        // taper
+        cv.clearLayer();
+        call(fl, "put", "streamline", 0f);
+        cv.size = 30;
+        float[][] st = new float[21][];
+        for (int i = 0; i <= 20; i++) st[i] = new float[]{W * (.2f + .6f * i / 20), H * .3f};
+        stroke(st, MotionEvent.TOOL_TYPE_STYLUS, 1);
+        long plain = inkSum(L());
+        cv.clearLayer();
+        call(fl, "put", "taperStart", 1f); call(fl, "put", "taperEnd", 1f);
+        stroke(st, MotionEvent.TOOL_TYPE_STYLUS, 1);
+        long tapered = inkSum(L());
+        assertTrue("taper makes the ends thinner: " + plain + " -> " + tapered, tapered < plain * 0.9);
+        shot("52_tapered");
+        call(fl, "setValues", (Object) before);
+    }
+
+    @Test public void shape_jitter_scatter_grain_scale_curve_draw() {
+        CanvasView.Brush b = named("Hard round");
+        cv.brush = b;
+        float[] before = (float[]) call(b, "values");
+        for (String k : new String[]{"roundness", "angle", "follow", "jitterSize", "jitterOpacity", "scatter", "grain", "grainScale", "curve", "sizeScale", "stabilize"}) {
+            call(b, "put", k, k.equals("angle") ? 45f : k.equals("roundness") ? 0.3f : k.equals("grainScale") ? 3f : k.equals("curve") ? 2f : 0.6f);
+        }
+        long b0 = inkSum(L());
+        stroke(new float[][]{{W * .2f, H * .5f}, {W * .4f, H * .55f}, {W * .6f, H * .45f}, {W * .8f, H * .5f}}, MotionEvent.TOOL_TYPE_STYLUS, 0.7f);
+        assertTrue(inkSum(L()) > b0);
+        shot("53_shaped_brush");
+        call(b, "setValues", (Object) before);
+    }
+
+    @Test public void brush_studio_edits_persist_and_reset() {
+        CanvasView.Brush ink = named("Ink pen");
+        cv.brush = ink;
+        call(act, "brushStudio", ink);
+        settle();
+        shot("54_brush_studio");
+        set(act, "studioTab", 1);
+        call(act, "brushStudio", ink);
+        settle();
+        shot("55_brush_studio_streamline");
+        call(ink, "put", "streamline", 0.9f);
+        call(ink, "put", "taperEnd", 0.7f);
+        call(act, "saveBrush", ink);
+        call(act, "closeStudio");
+        ctl.pause().stop();
+        settle();
+        // reload built-in defaults then load saved edits, as on a fresh start
+        call(named("Ink pen"), "setValues", (Object) CanvasView.DEFAULTS.get("Ink pen"));
+        launch();
+        CanvasView.Brush again = named("Ink pen");
+        assertEquals("edit kept after restart", 0.9f, (Float) call(again, "get", "streamline"), 0.001f);
+        assertEquals(0.7f, (Float) call(again, "get", "taperEnd"), 0.001f);
+        call(again, "setValues", (Object) CanvasView.DEFAULTS.get("Ink pen"));
+        assertEquals("reset", CanvasView.DEFAULTS.get("Ink pen")[1], (Float) call(again, "get", "streamline"), 0.001f);
+        java.io.File f = (java.io.File) get(again, "file");
+        if (f != null) f.delete();
+    }
 }

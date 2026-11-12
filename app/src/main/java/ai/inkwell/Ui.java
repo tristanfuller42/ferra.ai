@@ -246,4 +246,140 @@ final class Ui {
             return true;
         }
     }
+
+    // ---------------- Popovers (Procreate-style panels instead of Android menus) ----------------
+
+    /** A rounded dark panel anchored to a button. */
+    static final class Pop {
+        static Pop latest; // for tests
+        final android.widget.PopupWindow win;
+        final android.widget.LinearLayout box;
+        final Context c;
+        final float dp;
+
+        Pop(Context c, int widthDp) {
+            this.c = c;
+            dp = c.getResources().getDisplayMetrics().density;
+            box = new android.widget.LinearLayout(c);
+            box.setOrientation(android.widget.LinearLayout.VERTICAL);
+            box.setPadding(0, (int) (6 * dp), 0, (int) (6 * dp));
+            android.widget.ScrollView sv = new android.widget.ScrollView(c);
+            sv.addView(box);
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setColor(PANEL);
+            bg.setCornerRadius(14 * dp);
+            win = new android.widget.PopupWindow(sv, (int) (widthDp * dp), android.view.ViewGroup.LayoutParams.WRAP_CONTENT, true);
+            win.setBackgroundDrawable(bg);
+            win.setElevation(18 * dp);
+            win.setOutsideTouchable(true);
+            latest = this;
+        }
+
+        android.widget.TextView title(String t) {
+            android.widget.TextView v = new android.widget.TextView(c);
+            v.setText(t);
+            v.setTextColor(Color.WHITE);
+            v.setTextSize(17);
+            v.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            v.setPadding((int) (16 * dp), (int) (8 * dp), (int) (16 * dp), (int) (8 * dp));
+            box.addView(v);
+            return v;
+        }
+
+        android.widget.TextView section(String t) {
+            android.widget.TextView v = new android.widget.TextView(c);
+            v.setText(t.toUpperCase());
+            v.setTextColor(0xFF8E8E93);
+            v.setTextSize(12);
+            v.setPadding((int) (16 * dp), (int) (10 * dp), (int) (16 * dp), (int) (2 * dp));
+            box.addView(v);
+            return v;
+        }
+
+        /** A tappable row; the panel closes after the action unless keepOpen. */
+        android.widget.TextView item(String label, boolean enabled, Runnable r) {
+            android.widget.TextView v = new android.widget.TextView(c);
+            v.setText(label);
+            v.setTextSize(16);
+            v.setTextColor(enabled ? 0xFFF2F2F7 : 0xFF636366);
+            v.setPadding((int) (16 * dp), (int) (11 * dp), (int) (16 * dp), (int) (11 * dp));
+            if (enabled) v.setOnClickListener(x -> { win.dismiss(); r.run(); });
+            box.addView(v, new android.widget.LinearLayout.LayoutParams(-1, -2));
+            return v;
+        }
+
+        /** A row with an on/off switch, like Procreate's toggles. */
+        android.widget.Switch toggle(String label, boolean on, java.util.function.Consumer<Boolean> r) {
+            android.widget.Switch sw = new android.widget.Switch(c);
+            sw.setText(label);
+            sw.setTextSize(16);
+            sw.setTextColor(0xFFF2F2F7);
+            sw.setChecked(on);
+            sw.setPadding((int) (16 * dp), (int) (8 * dp), (int) (16 * dp), (int) (8 * dp));
+            sw.setOnCheckedChangeListener((b, v) -> r.accept(v));
+            box.addView(sw, new android.widget.LinearLayout.LayoutParams(-1, -2));
+            return sw;
+        }
+
+        void add(View v) { box.addView(v); }
+
+        void show(View anchor) {
+            try { win.showAsDropDown(anchor, 0, (int) (4 * dp)); } catch (Exception e) { /* window not ready */ }
+        }
+    }
+
+    /**
+     * Drop-in replacement for android.widget.PopupMenu that shows a Procreate-style popover.
+     * Supports items, enabled/checked state and inline sub-sections.
+     */
+    static final class PopMenu {
+        static PopMenu latest; // for tests
+        interface Listener { boolean onMenuItemClick(Item it); }
+
+        final class Item {
+            final int id; final CharSequence title; boolean enabled = true, checkable, checked; final String section;
+            Item(int id, CharSequence t, String section) { this.id = id; title = t; this.section = section; }
+            int getItemId() { return id; }
+            CharSequence getTitle() { return title; }
+            Item setEnabled(boolean e) { enabled = e; return this; }
+            Item setCheckable(boolean c) { checkable = c; return this; }
+            Item setChecked(boolean c) { checked = c; return this; }
+        }
+
+        final class Sub {
+            final String name;
+            Sub(String n) { name = n; }
+            Item add(int group, int id, int order, CharSequence t) { Item i = new Item(id, t, name); items.add(i); return i; }
+        }
+
+        final Context c; final View anchor;
+        final java.util.ArrayList<Item> items = new java.util.ArrayList<>();
+        Listener listener;
+        Pop pop;
+
+        PopMenu(Context c, View anchor) { this.c = c; this.anchor = anchor; latest = this; }
+        PopMenu(Context c, View anchor, int gravity) { this(c, anchor); }
+
+        PopMenu getMenu() { return this; }
+        Item add(int group, int id, int order, CharSequence t) { Item i = new Item(id, t, null); items.add(i); return i; }
+        Sub addSubMenu(int group, int id, int order, CharSequence t) { return new Sub(String.valueOf(t)); }
+        int size() { return items.size(); }
+        Item getItem(int i) { return items.get(i); }
+        Item findItem(int id) { for (Item i : items) if (i.id == id) return i; return null; }
+        void setOnMenuItemClickListener(Listener l) { listener = l; }
+
+        void click(Item it) { if (listener != null) listener.onMenuItemClick(it); }
+
+        void show() {
+            pop = new Pop(c, 300);
+            String sec = null;
+            for (Item it : items) {
+                if (it.section != null && !it.section.equals(sec)) pop.section(it.section);
+                sec = it.section;
+                if (it.checkable) pop.toggle(String.valueOf(it.title), it.checked, v -> { pop.win.dismiss(); click(it); });
+                else pop.item(String.valueOf(it.title), it.enabled, () -> click(it));
+            }
+            pop.show(anchor);
+        }
+    }
 }

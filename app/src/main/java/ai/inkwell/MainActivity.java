@@ -25,7 +25,6 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -170,7 +169,7 @@ public class MainActivity extends Activity {
         icon(side, Ui.REDO, (int) (40 * dp), v -> canvas.redo());
         canvas.onPicked = () -> pickBtn.setOn(false);
         canvas.onCopyMenu = () -> {
-            PopupMenu m = new PopupMenu(this, canvas, Gravity.CENTER);
+            Ui.PopMenu m = new Ui.PopMenu(this, canvas, Gravity.CENTER);
             String[] items = {"Cut", "Copy", "Copy all", "Duplicate", "Cut & Paste", "Paste"};
             for (int i = 0; i < items.length; i++) m.getMenu().add(0, i, i, items[i]).setEnabled(i != 5 || canvas.hasClipboard());
             m.setOnMenuItemClickListener(it -> {
@@ -624,19 +623,26 @@ public class MainActivity extends Activity {
     private void adjustMenu(View anchor) {
         if (canvas.adjusting()) finishAdjust(true);
         if (canvas.liquifying()) canvas.endLiquify(true);
-        PopupMenu m = new PopupMenu(this, anchor);
         Adj[] all = adjustments();
-        for (int i = 0; i < all.length; i++) m.getMenu().add(0, i, i, all[i].name);
-        m.getMenu().add(0, 100, 100, "Liquify");
-        m.getMenu().add(0, 101, 101, "Clone");
-        m.setOnMenuItemClickListener(it -> {
-            int id = it.getItemId();
-            if (id == 100) startLiquify();
-            else if (id == 101) startClone();
-            else startAdjust(all[id]);
-            return true;
-        });
-        m.show();
+        java.util.Map<String, Adj> by = new java.util.HashMap<>();
+        for (Adj a : all) by.put(a.name, a);
+        Ui.Pop pop = new Ui.Pop(this, 280);
+        pop.title("Adjustments");
+        String[][] groups = {
+                {"Tone", "Brightness / Contrast", "Curves", "Threshold", "Posterize", "Invert"},
+                {"Blur", "Gaussian Blur", "Motion Blur", "Perspective Blur"},
+                {"Effects", "Noise", "Sharpen", "Bloom", "Glitch", "Halftone"},
+                {"Distort", "Liquify", "Clone"}};
+        for (String[] g : groups) {
+            pop.section(g[0]);
+            for (int i = 1; i < g.length; i++) {
+                String n = g[i];
+                if (n.equals("Liquify")) pop.item(n, true, this::startLiquify);
+                else if (n.equals("Clone")) pop.item(n, true, this::startClone);
+                else if (by.containsKey(n)) pop.item(n, true, () -> startAdjust(by.get(n)));
+            }
+        }
+        pop.show(anchor);
     }
 
     private void startAdjust(Adj a) {
@@ -790,8 +796,8 @@ public class MainActivity extends Activity {
 
     private void layerOptions(View anchor, int idx) {
         CanvasView.Layer l = canvas.layers.get(idx);
-        PopupMenu m = new PopupMenu(this, anchor);
-        android.view.Menu mm = m.getMenu();
+        Ui.PopMenu m = new Ui.PopMenu(this, anchor);
+        Ui.PopMenu mm = m.getMenu();
         mm.add(0, 1, 0, "Rename");
         mm.add(0, 2, 1, "Select");
         mm.add(0, 3, 2, "Copy");
@@ -801,7 +807,7 @@ public class MainActivity extends Activity {
         mm.add(0, 7, 6, "Clipping mask").setCheckable(true).setChecked(l.clip);
         mm.add(0, 8, 7, "Invert");
         mm.add(0, 9, 8, "Merge down");
-        android.view.SubMenu bm = mm.addSubMenu(0, 10, 9, "Blend mode: " + CanvasView.BLEND_NAMES[l.blend]);
+        Ui.PopMenu.Sub bm = mm.addSubMenu(0, 10, 9, "Blend mode: " + CanvasView.BLEND_NAMES[l.blend]);
         for (int i = 0; i < CanvasView.BLEND_NAMES.length; i++) bm.add(1, 100 + i, i, CanvasView.BLEND_NAMES[i]);
         mm.add(0, 11, 10, "Delete");
         if (l.mask == null) mm.add(0, 20, 11, "Add mask");
@@ -850,7 +856,7 @@ public class MainActivity extends Activity {
     }
 
     private void blendMenu(View anchor, int idx) {
-        PopupMenu m = new PopupMenu(this, anchor);
+        Ui.PopMenu m = new Ui.PopMenu(this, anchor);
         for (int i = 0; i < CanvasView.BLEND_NAMES.length; i++) m.getMenu().add(0, i, i, CanvasView.BLEND_NAMES[i]);
         m.setOnMenuItemClickListener(it -> { canvas.setBlend(idx, it.getItemId()); return true; });
         m.show();
@@ -887,7 +893,7 @@ public class MainActivity extends Activity {
     }
 
     private void guideMenu(View anchor) {
-        PopupMenu m = new PopupMenu(this, anchor);
+        Ui.PopMenu m = new Ui.PopMenu(this, anchor);
         String[] g = {"Off", "2D grid", "Symmetry: vertical", "Symmetry: horizontal", "Symmetry: quadrant", "Symmetry: radial (8)",
                 "Isometric", "Perspective: 1-point", "Perspective: 2-point", "Perspective: 3-point"};
         for (int i = 0; i < g.length; i++) m.getMenu().add(0, i, i, (canvas.guide == i ? "✓ " : "") + g[i]);
@@ -937,70 +943,138 @@ public class MainActivity extends Activity {
     }
 
     /** Actions menu (top-left): files, canvas, settings, help. */
-    private void actionsMenu(View anchor) {
-        PopupMenu m = new PopupMenu(this, anchor);
-        android.view.Menu mm = m.getMenu();
-        mm.add(0, 1, 0, "Open file…");
-        mm.add(0, 2, 1, "Import image as layer…");
-        android.view.SubMenu ex = mm.addSubMenu(0, 3, 2, "Export / share as");
-        for (int i = 0; i < FORMATS.length; i++) ex.add(1, 100 + i, i, FORMATS[i]);
-        mm.add(0, 4, 3, "Canvas size…");
-        mm.add(0, 5, 4, "Fit to screen");
-        mm.add(0, 6, 5, "Import brushes…");
-        mm.add(0, 9, 5, "Add text…");
-        mm.add(0, 10, 5, "Drawing guide / symmetry…");
-        mm.add(0, 11, 5, (refView != null && refView.getVisibility() == View.VISIBLE ? "✓ " : "") + "Reference window");
-        mm.add(0, 12, 5, (canvas.anim ? "✓ " : "") + "Animation Assist");
-        mm.add(0, 13, 5, "Time-lapse…");
-        mm.add(0, 7, 6, "Sidebar on " + (sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL) ? "right" : "left"));
-        mm.add(0, 14, 7, (canvas.fingerPaint ? "✓ " : "") + "Finger paints when using a stylus");
-        mm.add(0, 8, 7, "Gestures help");
-        m.setOnMenuItemClickListener(it -> {
-            int id = it.getItemId();
-            if (id >= 100) { startExport(id - 100); return true; }
-            switch (id) {
-                case 1: openDoc(REQ_OPEN); break;
-                case 2: openDoc(REQ_IMPORT); break;
-                case 4: canvasDialog(); break;
-                case 5: canvas.animateFit(); break;
-                case 6: openDoc(REQ_BRUSH); break;
-                case 9: textDialog(); break;
-                case 10: guideMenu(anchor); break;
-                case 11: toggleReference(); break;
-                case 12: toggleAnimation(); break;
-                case 13: timelapseMenu(anchor); break;
-                case 14:
-                    canvas.fingerPaint = !canvas.fingerPaint;
-                    prefs.edit().putBoolean("fingerPaint", canvas.fingerPaint).apply();
-                    toast(canvas.fingerPaint ? "Fingers paint too" : "Palm rejection: with a stylus, fingers only move the canvas");
-                    break;
-                case 7:
-                    sideLp.gravity = sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL)
-                            ? Gravity.END | Gravity.CENTER_VERTICAL : Gravity.START | Gravity.CENTER_VERTICAL;
-                    side.setLayoutParams(sideLp);
-                    break;
-                case 8:
-                    new AlertDialog.Builder(this).setTitle("Gestures").setMessage(
-                            "Two-finger tap: undo · hold: keep undoing\n"
-                          + "Three-finger tap: redo\n"
-                          + "Pinch / drag / twist: zoom, move, rotate\n"
-                          + "Quick pinch-in: fit to screen\n"
-                          + "Three-finger scrub: clear layer\n"
-                          + "Three-finger swipe down: copy & paste menu\n"
-                          + "Four-finger tap: full screen\n"
-                          + "Touch and hold: eyedropper\n"
-                          + "Draw and hold: QuickShape (line / ellipse)\n"
-                          + "Tap the active brush, smudge or eraser: brush library\n"
-                          + "Drag the colour circle onto the canvas: fill (ColorDrop)\n"
-                          + "Tap the selected layer: layer options\n"
-                          + "In an adjustment: slide on the canvas to change the amount\n"
-                          + "Layers: tap the mask thumbnail to paint the mask")
-                            .setPositiveButton("OK", null).show();
-                    break;
-            }
-            return true;
-        });
-        m.show();
+    private static final String[] ACTION_TABS = {"Add", "Canvas", "Share", "Video", "Prefs", "Help"};
+    private int actionTab;
+
+    private void actionsMenu(View anchor) { actionsMenu(anchor, actionTab); }
+
+    /** Actions panel with tabs, like Procreate's wrench menu. */
+    private void actionsMenu(View anchor, int tab) {
+        actionTab = tab;
+        Ui.Pop pop = new Ui.Pop(this, 340);
+        LinearLayout tabs = barRow();
+        tabs.setPadding((int) (6 * dp), 0, (int) (6 * dp), (int) (4 * dp));
+        for (int i = 0; i < ACTION_TABS.length; i++) {
+            int k = i;
+            TextView t = chip(tabs, ACTION_TABS[i], i == tab, v -> { pop.win.dismiss(); actionsMenu(anchor, k); });
+            t.setTextSize(13);
+        }
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        hs.addView(tabs);
+        pop.add(hs);
+        boolean left = sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL);
+        switch (tab) {
+            case 0: // Add
+                pop.item("Insert a file", true, () -> action(2, anchor));
+                pop.item("Open as a new drawing", true, () -> action(1, anchor));
+                pop.item("Add text", true, () -> action(9, anchor));
+                pop.item("Cut", true, () -> canvas.copy(false, true));
+                pop.item("Copy", true, () -> canvas.copy(false, false));
+                pop.item("Copy canvas", true, () -> canvas.copy(true, false));
+                pop.item("Paste", canvas.hasClipboard(), () -> { if (!canvas.paste()) full(); });
+                break;
+            case 1: // Canvas
+                pop.item("Crop & resize", true, () -> action(4, anchor));
+                pop.toggle("Animation Assist", canvas.anim, v -> { pop.win.dismiss(); action(12, anchor); });
+                pop.toggle("Drawing guide", canvas.guide != 0, v -> { pop.win.dismiss(); if (v) guideMenu(anchor); else { canvas.guide = 0; canvas.invalidate(); } });
+                pop.item("Edit drawing guide", true, () -> guideMenu(anchor));
+                pop.toggle("Reference", refView != null && refView.getVisibility() == View.VISIBLE, v -> { pop.win.dismiss(); action(11, anchor); });
+                pop.item("Flip canvas horizontally", true, () -> canvas.flipView(true));
+                pop.item("Flip canvas vertically", true, () -> canvas.flipView(false));
+                pop.item("Fit to screen", true, () -> action(5, anchor));
+                pop.item("Canvas information", true, this::canvasInfo);
+                break;
+            case 2: // Share
+                pop.section("Share image");
+                for (int i = FORMATS.length - 1; i >= 0; i--) { int f = i; pop.item(FORMATS[i].replace(" (layers)", ""), true, () -> startExport(f)); }
+                pop.section("Share layers");
+                pop.item("Animated GIF", true, () -> exportAnimRequest(true));
+                pop.item("Animated MP4", true, () -> exportAnimRequest(false));
+                break;
+            case 3: // Video
+                pop.item("Time-lapse replay", true, this::replayTimelapse);
+                pop.toggle("Record time-lapse", tlOn, v -> { tlOn = v; prefs.edit().putBoolean("timelapse", tlOn).apply(); });
+                pop.item("Export time-lapse: full length", true, () -> timelapseExport(false));
+                pop.item("Export time-lapse: 30 seconds", true, () -> timelapseExport(true));
+                pop.item("Delete recorded time-lapse", true, () -> confirm("Delete the recorded time-lapse?", () -> { for (File f : tlFrames()) f.delete(); }));
+                break;
+            case 4: // Prefs
+                pop.toggle("Right-hand interface", !left, v -> action(7, anchor));
+                pop.toggle("Fingers paint when using a stylus", canvas.fingerPaint, v -> action(14, anchor));
+                pop.item("Import brushes", true, () -> action(6, anchor));
+                break;
+            default: // Help
+                pop.item("Gesture controls", true, () -> action(8, anchor));
+                pop.item("About Inkwell", true, () -> new AlertDialog.Builder(this).setTitle("Inkwell")
+                        .setMessage("A tiny greyscale drawing app. No libraries, plain Java.").setPositiveButton("OK", null).show());
+        }
+        pop.show(anchor);
+    }
+
+    private void exportAnimRequest(boolean gif) {
+        startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                .setType(gif ? "image/gif" : "video/mp4")
+                .putExtra(Intent.EXTRA_TITLE, nameOf(curId) + (gif ? ".gif" : ".mp4")), gif ? REQ_GIF : REQ_AMP4);
+    }
+
+    private void timelapseExport(boolean shortVersion) {
+        tlShort = shortVersion;
+        if (tlFrames().length == 0) { toast("Nothing recorded yet"); return; }
+        startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("video/mp4").putExtra(Intent.EXTRA_TITLE, nameOf(curId) + " time-lapse.mp4"), REQ_TL);
+    }
+
+    private void canvasInfo() {
+        new AlertDialog.Builder(this).setTitle("Canvas information").setMessage(
+                "Size: " + canvas.docW + " × " + canvas.docH + " px\n"
+              + "Layers: " + canvas.layers.size() + " of " + canvas.maxLayers() + " possible\n"
+              + "Time-lapse frames: " + tlFrames().length + "\n"
+              + "Name: " + nameOf(curId)).setPositiveButton("OK", null).show();
+    }
+
+    /** Runs an Actions command by id (also used by tests). */
+    private void action(int id, View anchor) {
+        switch (id) {
+            case 1: openDoc(REQ_OPEN); break;
+            case 2: openDoc(REQ_IMPORT); break;
+            case 4: canvasDialog(); break;
+            case 5: canvas.animateFit(); break;
+            case 6: openDoc(REQ_BRUSH); break;
+            case 9: textDialog(); break;
+            case 10: guideMenu(anchor); break;
+            case 11: toggleReference(); break;
+            case 12: toggleAnimation(); break;
+            case 13: timelapseMenu(anchor); break;
+            case 14:
+                canvas.fingerPaint = !canvas.fingerPaint;
+                prefs.edit().putBoolean("fingerPaint", canvas.fingerPaint).apply();
+                break;
+            case 7:
+                sideLp.gravity = sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL)
+                        ? Gravity.END | Gravity.CENTER_VERTICAL : Gravity.START | Gravity.CENTER_VERTICAL;
+                side.setLayoutParams(sideLp);
+                break;
+            case 8:
+                new AlertDialog.Builder(this).setTitle("Gesture controls").setMessage(
+                        "Two-finger tap: undo · hold: keep undoing\n"
+                      + "Three-finger tap: redo\n"
+                      + "Pinch / drag / twist: zoom, move, rotate\n"
+                      + "Quick pinch-in: fit to screen\n"
+                      + "Three-finger scrub: clear layer\n"
+                      + "Three-finger swipe down: copy & paste menu\n"
+                      + "Four-finger tap: full screen\n"
+                      + "Touch and hold: eyedropper\n"
+                      + "Draw and hold: QuickShape (line / ellipse)\n"
+                      + "Tap the active brush, smudge or eraser: Brush Library\n"
+                      + "Tap the selected brush in the library: Brush Studio\n"
+                      + "Drag the colour circle onto the canvas: fill (ColorDrop)\n"
+                      + "Tap the selected layer: layer options\n"
+                      + "In an adjustment: slide on the canvas to change the amount\n"
+                      + "Layers: tap the mask thumbnail to paint the mask")
+                        .setPositiveButton("OK", null).show();
+                break;
+        }
     }
 
     private void openDoc(int req) {
@@ -1015,69 +1089,297 @@ public class MainActivity extends Activity {
                 .putExtra(Intent.EXTRA_TITLE, "inkwell_" + System.currentTimeMillis() / 1000 + "." + EXTS[fmt]), REQ_EXPORT);
     }
 
-    /** Brush list + brush opacity. Tap the active Brush/Erase button to open. */
+    private String libSet;
+
+    /** Brush Library, like Procreate: brush sets on the left, brushes with stroke previews on the right. */
     private void pickBrush() {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        int p = (int) (12 * dp);
-        box.setPadding(p, p, p, p);
-        AlertDialog[] dlg = new AlertDialog[1];
-        for (CanvasView.Brush br : CanvasView.BRUSHES) {
-            LinearLayout t = new LinearLayout(this); // like Procreate's Brush Library: name + stroke preview
-            t.setOrientation(LinearLayout.VERTICAL);
-            t.setPadding(p, p / 2, p, p / 2);
-            boolean on = br == canvas.brush;
-            t.setBackgroundColor(on ? Ui.ACCENT : 0);
-            TextView nm = new TextView(this);
-            nm.setText(br.name);
-            nm.setTextSize(15);
-            nm.setTextColor(on ? Color.WHITE : 0xFFE8E8E8);
-            t.addView(nm);
-            ImageView pv = new ImageView(this);
-            pv.setImageBitmap(brushPreview(br));
-            t.addView(pv, new LinearLayout.LayoutParams((int) (240 * dp), (int) (36 * dp)));
-            t.setOnClickListener(v -> { canvas.brush = br; updateBrush(); dlg[0].dismiss(); });
-            if (br.file != null) t.setOnLongClickListener(v -> {
-                confirm("Delete brush \"" + br.name + "\"?", () -> {
-                    br.file.delete();
-                    CanvasView.BRUSHES.remove(br);
-                    if (canvas.brush == br) canvas.brush = CanvasView.BRUSHES.get(0);
+        if (libSet == null) libSet = canvas.brush.set;
+        Ui.Pop pop = new Ui.Pop(this, 440);
+        LinearLayout head = barRow();
+        head.setPadding((int) (16 * dp), 0, (int) (8 * dp), 0);
+        TextView t = new TextView(this);
+        t.setText("Brush Library");
+        t.setTextColor(Color.WHITE);
+        t.setTextSize(17);
+        t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        head.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+        chip(head, "Import", false, v -> { pop.win.dismiss(); openDoc(REQ_BRUSH); });
+        chip(head, "＋", false, v -> { // new brush = copy of the current one, then edit it
+            pop.win.dismiss();
+            CanvasView.Brush b = canvas.brush.copy(canvas.brush.name + " copy");
+            b.set = libSet;
+            CanvasView.BRUSHES.add(b);
+            canvas.brush = b;
+            saveBrush(b);
+            updateBrush();
+            brushStudio(b);
+        });
+        pop.add(head);
+        LinearLayout cols = new LinearLayout(this);
+        LinearLayout sets = new LinearLayout(this);
+        sets.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        Runnable[] fill = new Runnable[1];
+        fill[0] = () -> {
+            sets.removeAllViews();
+            list.removeAllViews();
+            for (String set : CanvasView.SETS) {
+                boolean any = false;
+                for (CanvasView.Brush b : CanvasView.BRUSHES) if (b.set.equals(set)) any = true;
+                if (!any && !set.equals(libSet)) continue;
+                TextView st = new TextView(this);
+                st.setText(set);
+                st.setTextSize(15);
+                st.setPadding((int) (14 * dp), (int) (12 * dp), (int) (8 * dp), (int) (12 * dp));
+                boolean on = set.equals(libSet);
+                st.setTextColor(on ? Color.WHITE : 0xFFAEAEB2);
+                st.setBackgroundColor(on ? Ui.ACCENT : 0);
+                st.setOnClickListener(v -> { libSet = set; fill[0].run(); });
+                sets.addView(st);
+            }
+            for (CanvasView.Brush br : CanvasView.BRUSHES) {
+                if (!br.set.equals(libSet)) continue;
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.VERTICAL);
+                row.setPadding((int) (10 * dp), (int) (6 * dp), (int) (10 * dp), (int) (6 * dp));
+                boolean on = br == canvas.brush;
+                android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+                bg.setColor(on ? Ui.ACCENT : 0);
+                bg.setCornerRadius(8 * dp);
+                row.setBackground(bg);
+                TextView nm = new TextView(this);
+                nm.setText(br.name + (on ? "   ·  tap again to edit" : ""));
+                nm.setTextSize(14);
+                nm.setTextColor(on ? Color.WHITE : 0xFFE8E8E8);
+                row.addView(nm);
+                ImageView pv = new ImageView(this);
+                pv.setImageBitmap(brushPreview(br));
+                row.addView(pv, new LinearLayout.LayoutParams((int) (240 * dp), (int) (36 * dp)));
+                row.setOnClickListener(v -> {
+                    if (canvas.brush == br) { pop.win.dismiss(); brushStudio(br); return; }
+                    canvas.brush = br;
                     updateBrush();
-                    dlg[0].dismiss();
+                    fill[0].run();
                 });
-                return true;
-            });
-            box.addView(t);
-        }
-        TextView ol = new TextView(this);
-        ol.setText("Brush opacity");
-        ol.setTextColor(0xFF9A9A9E);
-        ol.setPadding(p, p, p, 0);
-        box.addView(ol);
-        SeekBar sb = new SeekBar(this);
-        sb.setMax(100);
-        sb.setProgress(Math.round(canvas.opacity * 100));
-        sb.setOnSeekBarChangeListener(new Slider() {
-            public void onProgressChanged(SeekBar s, int v, boolean u) { canvas.opacity = Math.max(1, v) / 100f; }
+                row.setOnLongClickListener(v -> { brushMenu(v, br, pop); return true; });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+                lp.setMargins(0, 2, (int) (8 * dp), 2);
+                list.addView(row, lp);
+            }
+        };
+        fill[0].run();
+        cols.addView(sets, new LinearLayout.LayoutParams((int) (130 * dp), -2));
+        cols.addView(list, new LinearLayout.LayoutParams(0, -2, 1f));
+        pop.add(cols);
+        pop.show(brushBtn);
+    }
+
+    /** Long-press a brush: duplicate / reset / delete. */
+    private void brushMenu(View anchor, CanvasView.Brush br, Ui.Pop lib) {
+        Ui.Pop pop = new Ui.Pop(this, 240);
+        pop.item("Edit in Brush Studio", true, () -> { lib.win.dismiss(); canvas.brush = br; updateBrush(); brushStudio(br); });
+        pop.item("Duplicate", true, () -> {
+            CanvasView.Brush b = br.copy(br.name + " copy");
+            CanvasView.BRUSHES.add(CanvasView.BRUSHES.indexOf(br) + 1, b);
+            saveBrush(b);
+            lib.win.dismiss();
+            pickBrush();
         });
-        box.addView(sb, new LinearLayout.LayoutParams(-1, (int) (48 * dp)));
-        TextView imp = new TextView(this);
-        imp.setText("＋ Import brushes (Procreate .brush/.brushset, Photoshop .abr)");
-        imp.setTextColor(Ui.ACCENT);
-        imp.setPadding(p, p, p, p);
-        imp.setOnClickListener(v -> {
-            dlg[0].dismiss();
-            startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                    .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQ_BRUSH);
+        pop.item("Reset to original", br.builtin && CanvasView.DEFAULTS.containsKey(br.name), () -> {
+            br.setValues(CanvasView.DEFAULTS.get(br.name));
+            if (br.file != null) { br.file.delete(); br.file = null; }
+            previews.remove(br);
+            lib.win.dismiss();
+            pickBrush();
         });
-        box.addView(imp);
-        TextView hint = new TextView(this);
-        hint.setText("Long-press an imported brush to delete it.");
-        hint.setPadding(p, 0, p, p);
-        box.addView(hint);
-        ScrollView sv = new ScrollView(this);
-        sv.addView(box);
-        dlg[0] = new AlertDialog.Builder(this).setTitle("Brushes").setView(sv).setPositiveButton("Done", null).show();
+        pop.item("Delete", !br.builtin, () -> confirm("Delete brush \"" + br.name + "\"?", () -> {
+            if (br.file != null) br.file.delete();
+            CanvasView.BRUSHES.remove(br);
+            if (canvas.brush == br) canvas.brush = CanvasView.BRUSHES.get(0);
+            updateBrush();
+            lib.win.dismiss();
+        }));
+        pop.show(anchor);
+    }
+
+    /** Saves a brush's settings (built-in brushes keep their edits too). */
+    private void saveBrush(CanvasView.Brush b) {
+        try {
+            if (b.file == null) {
+                String safe = b.name.replaceAll("[^A-Za-z0-9]+", "_");
+                b.file = new File(brushDir(), (b.builtin ? "b_" : "u_" + System.currentTimeMillis() + "_") + safe + ".fbr");
+            }
+            Brushes.save(b, b.file);
+        } catch (Exception e) { toast("Could not save brush: " + e.getMessage()); }
+    }
+
+    // ---------- Brush Studio ----------
+
+    /** Setting: key, label, min, max, how to show the value. */
+    private static final Object[][][] STUDIO = {
+        {{"Stroke path"}, {"spacing", "Spacing", 0.02f, 1f, "%"}, {"jitterSize", "Size jitter", 0f, 1f, "%"},
+                {"jitterOpacity", "Opacity jitter", 0f, 1f, "%"}, {"scatter", "Scatter", 0f, 1f, "%"}},
+        {{"Stabilization"}, {"streamline", "StreamLine (smoothing)", 0f, 1f, "%"}, {"stabilize", "Stabilization", 0f, 1f, "%"}},
+        {{"Taper"}, {"taperStart", "Start taper", 0f, 1f, "%"}, {"taperEnd", "End taper", 0f, 1f, "%"}},
+        {{"Shape"}, {"roundness", "Roundness", 0.05f, 1f, "%"}, {"angle", "Angle", 0f, 180f, "°"},
+                {"follow", "Rotate with stroke", 0f, 1f, "toggle"}, {"hard", "Hardness", 0f, 1f, "%"}},
+        {{"Grain"}, {"grain", "Grain depth", 0f, 1f, "%"}, {"grainScale", "Grain scale", 0.25f, 4f, "×"}},
+        {{"Dynamics"}, {"minSize", "Pressure → size", 0f, 1f, "inv%"}, {"minAlpha", "Pressure → opacity", 0f, 1f, "inv%"},
+                {"curve", "Pressure curve (soft … firm)", 0.3f, 3f, "×"}},
+        {{"Properties"}, {"sizeScale", "Maximum size", 0.1f, 3f, "×"}, {"alpha", "Maximum opacity", 0.05f, 1f, "%"}},
+        {{"About this brush"}},
+    };
+
+    private FrameLayout studio;
+    private int studioTab;
+
+    private void brushStudio(CanvasView.Brush b) {
+        float[] before = b.values();
+        String beforeName = b.name, beforeSet = b.set;
+        if (studio != null) shell.removeView(studio);
+        studio = new FrameLayout(this);
+        studio.setBackgroundColor(0xFF111113);
+        studio.setClickable(true);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout head = barRow();
+        head.setPadding((int) (12 * dp), 0, (int) (8 * dp), 0);
+        TextView t = new TextView(this);
+        t.setText("Brush Studio  ·  " + b.name);
+        t.setTextColor(Color.WHITE);
+        t.setTextSize(18);
+        head.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+        chip(head, "Cancel", false, v -> {
+            b.setValues(before); b.name = beforeName; b.set = beforeSet;
+            previews.remove(b);
+            closeStudio();
+        });
+        chip(head, "Done", true, v -> { previews.remove(b); saveBrush(b); updateBrush(); closeStudio(); });
+        col.addView(head, new LinearLayout.LayoutParams(-1, (int) (52 * dp)));
+        // live preview "drawing pad"
+        ImageView pad = new ImageView(this);
+        pad.setBackgroundColor(0xFF2C2C2E);
+        int pw = (int) (Math.min(getResources().getDisplayMetrics().widthPixels, 900 * dp) - 24 * dp);
+        Runnable redraw = () -> pad.setImageBitmap(CanvasView.brushPreview(this, b, pw, (int) (110 * dp)));
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-1, (int) (110 * dp));
+        plp.setMargins((int) (12 * dp), 0, (int) (12 * dp), (int) (8 * dp));
+        col.addView(pad, plp);
+        LinearLayout body = new LinearLayout(this);
+        LinearLayout tabs = new LinearLayout(this);
+        tabs.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout settings = new LinearLayout(this);
+        settings.setOrientation(LinearLayout.VERTICAL);
+        settings.setPadding((int) (12 * dp), 0, (int) (12 * dp), 0);
+        Runnable[] show = new Runnable[1];
+        show[0] = () -> {
+            tabs.removeAllViews();
+            settings.removeAllViews();
+            for (int i = 0; i < STUDIO.length; i++) {
+                int k = i;
+                TextView tt = new TextView(this);
+                tt.setText((String) STUDIO[i][0][0]);
+                tt.setTextSize(15);
+                tt.setPadding((int) (14 * dp), (int) (12 * dp), (int) (8 * dp), (int) (12 * dp));
+                tt.setTextColor(i == studioTab ? Color.WHITE : 0xFFAEAEB2);
+                tt.setBackgroundColor(i == studioTab ? Ui.ACCENT : 0);
+                tt.setOnClickListener(v -> { studioTab = k; show[0].run(); });
+                tabs.addView(tt);
+            }
+            Object[][] sec = STUDIO[studioTab];
+            if (sec.length == 1) { aboutBrush(settings, b, t); return; }
+            for (int i = 1; i < sec.length; i++) {
+                String key = (String) sec[i][0], label = (String) sec[i][1], fmt = (String) sec[i][4];
+                float mn = (Float) sec[i][2], mx = (Float) sec[i][3];
+                if (fmt.equals("toggle")) {
+                    android.widget.Switch sw = new android.widget.Switch(this);
+                    sw.setText(label);
+                    sw.setTextColor(Color.WHITE);
+                    sw.setTextSize(15);
+                    sw.setChecked(b.get(key) >= 0.5f);
+                    sw.setPadding(0, (int) (10 * dp), 0, (int) (10 * dp));
+                    sw.setOnCheckedChangeListener((x, on) -> { b.put(key, on ? 1 : 0); redraw.run(); });
+                    settings.addView(sw);
+                    continue;
+                }
+                boolean inv = fmt.equals("inv%");
+                TextView lab = new TextView(this);
+                lab.setTextColor(0xFFE8E8E8);
+                lab.setTextSize(14);
+                lab.setPadding(0, (int) (10 * dp), 0, 0);
+                settings.addView(lab);
+                SeekBar sb = new SeekBar(this);
+                sb.setMax(1000);
+                float cur = inv ? 1 - b.get(key) : b.get(key);
+                sb.setProgress(Math.round((cur - mn) / (mx - mn) * 1000));
+                Runnable label2 = () -> {
+                    float v = b.get(key);
+                    if (inv) v = 1 - v;
+                    String shown = fmt.equals("°") ? Math.round(v) + "°" : fmt.equals("×") ? String.format("%.2f×", v) : Math.round(v * 100) + "%";
+                    lab.setText(label + "   " + shown);
+                };
+                label2.run();
+                sb.setOnSeekBarChangeListener(new Slider() {
+                    public void onProgressChanged(SeekBar s2, int pr, boolean u) {
+                        float v = mn + (mx - mn) * pr / 1000f;
+                        b.put(key, inv ? 1 - v : v);
+                        label2.run();
+                    }
+                    public void onStopTrackingTouch(SeekBar s2) { redraw.run(); }
+                });
+                settings.addView(sb, new LinearLayout.LayoutParams(-1, (int) (40 * dp)));
+            }
+        };
+        show[0].run();
+        redraw.run();
+        ScrollView ts = new ScrollView(this);
+        ts.addView(tabs);
+        ScrollView ss = new ScrollView(this);
+        ss.addView(settings);
+        body.addView(ts, new LinearLayout.LayoutParams((int) (170 * dp), -1));
+        body.addView(ss, new LinearLayout.LayoutParams(0, -1, 1f));
+        col.addView(body, new LinearLayout.LayoutParams(-1, 0, 1f));
+        studio.addView(col);
+        shell.addView(studio);
+    }
+
+    private void aboutBrush(LinearLayout settings, CanvasView.Brush b, TextView title) {
+        TextView nl = new TextView(this);
+        nl.setText("Name");
+        nl.setTextColor(0xFF8E8E93);
+        settings.addView(nl);
+        android.widget.EditText et = new android.widget.EditText(this);
+        et.setText(b.name);
+        et.setTextColor(Color.WHITE);
+        et.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence c, int a, int x, int y) { }
+            public void onTextChanged(CharSequence c, int a, int x, int y) { }
+            public void afterTextChanged(android.text.Editable e) {
+                if (e.length() > 0 && !b.builtin) { b.name = e.toString(); title.setText("Brush Studio  ·  " + b.name); }
+            }
+        });
+        et.setEnabled(!b.builtin);
+        settings.addView(et);
+        TextView sl = new TextView(this);
+        sl.setText("Brush set");
+        sl.setTextColor(0xFF8E8E93);
+        sl.setPadding(0, (int) (12 * dp), 0, 0);
+        settings.addView(sl);
+        LinearLayout sets = barRow();
+        for (String set : CanvasView.SETS) chip(sets, set, set.equals(b.set), v -> { b.set = set; libSet = set; settings.removeAllViews(); aboutBrush(settings, b, title); });
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.addView(sets);
+        settings.addView(hs);
+        TextView info = new TextView(this);
+        info.setText(b.builtin ? "Built-in brush. Your changes are kept; long-press it in the library to reset."
+                : "Your brush. Long-press it in the library to duplicate or delete.");
+        info.setTextColor(0xFF8E8E93);
+        info.setPadding(0, (int) (12 * dp), 0, 0);
+        settings.addView(info);
+    }
+
+    private void closeStudio() {
+        if (studio != null) { shell.removeView(studio); studio = null; }
     }
 
     private final java.util.HashMap<CanvasView.Brush, Bitmap> previews = new java.util.HashMap<>();
@@ -1101,13 +1403,17 @@ public class MainActivity extends Activity {
     }
 
     /** Grey picker: slider (black..white) plus quick swatches. */
+    private final java.util.ArrayList<Integer> greyHistory = new java.util.ArrayList<>();
+
+    /** Colour panel (greyscale): a tone strip, fine slider, palette and history. */
     private void pickGrey() {
+        Ui.Pop pop = new Ui.Pop(this, 320);
+        pop.title("Colour");
+        int p = (int) (14 * dp);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        int p = (int) (16 * dp);
-        box.setPadding(p, p, p, p);
+        box.setPadding(p, 0, p, p);
         View preview = new View(this);
-        box.addView(preview, new LinearLayout.LayoutParams(-1, (int) (48 * dp)));
         SeekBar sb = new SeekBar(this);
         sb.setMax(255);
         Runnable show = () -> {
@@ -1116,24 +1422,76 @@ public class MainActivity extends Activity {
             canvas.grey = g;
             updateColor();
         };
+        View strip = new View(this) { // tap or drag along the tone strip
+            final Paint pt = new Paint();
+            @Override protected void onDraw(Canvas c) {
+                pt.setShader(new android.graphics.LinearGradient(0, 0, getWidth(), 0, Color.BLACK, Color.WHITE, android.graphics.Shader.TileMode.CLAMP));
+                c.drawRect(0, 0, getWidth(), getHeight(), pt);
+                float rr = getHeight() / 2.6f, x = rr + canvas.grey / 255f * (getWidth() - 2 * rr);
+                Paint r = new Paint(Paint.ANTI_ALIAS_FLAG);
+                r.setStyle(Paint.Style.STROKE);
+                r.setStrokeWidth(3 * dp);
+                r.setColor(Ui.ACCENT);
+                c.drawCircle(x, getHeight() / 2f, rr, r);
+            }
+            @Override public boolean onTouchEvent(android.view.MotionEvent e) {
+                int g = Math.max(0, Math.min(255, Math.round(e.getX() / getWidth() * 255)));
+                sb.setProgress(255 - g);
+                invalidate();
+                getParent().requestDisallowInterceptTouchEvent(true);
+                return true;
+            }
+        };
+        box.addView(strip, new LinearLayout.LayoutParams(-1, (int) (56 * dp)));
         sb.setProgress(255 - canvas.grey);
         sb.setOnSeekBarChangeListener(new Slider() {
-            public void onProgressChanged(SeekBar s, int v, boolean u) { show.run(); }
+            public void onProgressChanged(SeekBar s, int v, boolean u) { show.run(); strip.invalidate(); }
         });
-        box.addView(sb, new LinearLayout.LayoutParams(-1, (int) (48 * dp)));
+        box.addView(sb, new LinearLayout.LayoutParams(-1, (int) (44 * dp)));
+        box.addView(preview, new LinearLayout.LayoutParams(-1, (int) (28 * dp)));
+        TextView pl = new TextView(this);
+        pl.setText("PALETTE");
+        pl.setTextColor(0xFF8E8E93);
+        pl.setTextSize(12);
+        pl.setPadding(0, p, 0, 4);
+        box.addView(pl);
+        box.addView(swatches(new int[]{0, 32, 64, 96, 128, 160, 192, 224, 255}, sb));
+        if (!greyHistory.isEmpty()) {
+            TextView hl = new TextView(this);
+            hl.setText("HISTORY");
+            hl.setTextColor(0xFF8E8E93);
+            hl.setTextSize(12);
+            hl.setPadding(0, p, 0, 4);
+            box.addView(hl);
+            int[] h = new int[greyHistory.size()];
+            for (int i = 0; i < h.length; i++) h[i] = greyHistory.get(i);
+            box.addView(swatches(h, sb));
+        }
+        pop.add(box);
+        show.run();
+        pop.win.setOnDismissListener(() -> { // remember recently used greys
+            greyHistory.remove(Integer.valueOf(canvas.grey));
+            greyHistory.add(0, canvas.grey);
+            while (greyHistory.size() > 9) greyHistory.remove(greyHistory.size() - 1);
+        });
+        pop.show(colorBtn);
+    }
+
+    private LinearLayout swatches(int[] greys, SeekBar sb) {
         LinearLayout sw = new LinearLayout(this);
-        for (int i = 0; i <= 8; i++) {
-            int g = Math.min(255, i * 32);
+        for (int g : greys) {
             View v = new View(this);
-            v.setBackgroundColor(Color.rgb(g, g, g));
+            android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
+            d.setColor(Color.rgb(g, g, g));
+            d.setCornerRadius(6 * dp);
+            d.setStroke(1, 0xFF636366);
+            v.setBackground(d);
             v.setOnClickListener(x -> sb.setProgress(255 - g));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, (int) (40 * dp), 1f);
-            lp.setMargins(2, 2, 2, 2);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (28 * dp), (int) (28 * dp));
+            lp.setMargins(2, 2, (int) (4 * dp), 2);
             sw.addView(v, lp);
         }
-        box.addView(sw);
-        show.run();
-        new AlertDialog.Builder(this).setTitle("Ink grey").setView(box).setPositiveButton("Done", null).show();
+        return sw;
     }
 
     private void confirm(String msg, Runnable yes) {
@@ -1254,7 +1612,7 @@ public class MainActivity extends Activity {
 
     private void groupMenu(View anchor, int g) {
         CanvasView.Group gr = canvas.groups.get(g);
-        PopupMenu m = new PopupMenu(this, anchor);
+        Ui.PopMenu m = new Ui.PopMenu(this, anchor);
         m.getMenu().add(0, 1, 0, "Rename group");
         m.getMenu().add(0, 2, 1, "Group opacity…");
         m.getMenu().add(0, 3, 2, "Flatten group");
@@ -1441,7 +1799,7 @@ public class MainActivity extends Activity {
         chip(ctl, "＋ Frame", false, v -> { if (!canvas.addLayer(canvas.newLayer("Frame " + (canvas.layers.size() + 1)))) full(); });
         chip(ctl, "Settings", false, v -> animSettings());
         chip(ctl, "Export", false, v -> {
-            PopupMenu m = new PopupMenu(this, v);
+            Ui.PopMenu m = new Ui.PopMenu(this, v);
             m.getMenu().add(0, REQ_GIF, 0, "Animated GIF");
             m.getMenu().add(0, REQ_AMP4, 1, "MP4 video");
             m.setOnMenuItemClickListener(it -> {
@@ -1578,7 +1936,7 @@ public class MainActivity extends Activity {
     // ---------- Open / import ----------
 
     private void openMenu(View anchor) {
-        PopupMenu m = new PopupMenu(this, anchor);
+        Ui.PopMenu m = new Ui.PopMenu(this, anchor);
         m.getMenu().add(0, REQ_OPEN, 0, "Open file (replaces drawing)");
         m.getMenu().add(0, REQ_IMPORT, 1, "Import as new layer");
         m.setOnMenuItemClickListener(it -> {
@@ -1620,7 +1978,13 @@ public class MainActivity extends Activity {
         if (fs == null) return;
         java.util.Arrays.sort(fs);
         for (File f : fs) {
-            try { CanvasView.BRUSHES.add(Brushes.load(f)); } catch (Exception ignored) { }
+            try {
+                CanvasView.Brush b = Brushes.load(f);
+                CanvasView.Brush same = null;
+                if (b.builtin) for (CanvasView.Brush x : CanvasView.BRUSHES) if (x.builtin && x.name.equals(b.name)) same = x;
+                if (same != null) { same.setValues(b.values()); same.set = b.set; same.file = f; } // edited built-in
+                else CanvasView.BRUSHES.add(b);
+            } catch (Exception ignored) { }
         }
     }
 
@@ -1738,7 +2102,7 @@ public class MainActivity extends Activity {
     // ---------- Export ----------
 
     private void exportMenu(View anchor) {
-        PopupMenu m = new PopupMenu(this, anchor);
+        Ui.PopMenu m = new Ui.PopMenu(this, anchor);
         for (int i = 0; i < FORMATS.length; i++) m.getMenu().add(0, i, i, FORMATS[i]);
         m.setOnMenuItemClickListener(it -> {
             exportFormat = it.getItemId();
@@ -1811,6 +2175,7 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (studio != null) { closeStudio(); return; }
         if (gallery != null && gallery.getVisibility() == View.VISIBLE) {
             if (docFile(curId).exists()) gallery.setVisibility(View.GONE); else super.onBackPressed();
         } else showGallery();
@@ -1985,7 +2350,7 @@ public class MainActivity extends Activity {
         int[][] sizes = {{sw, sh}, {sh, sw}, {2048, 2048}, {2048, 2732}, {2480, 3508}, {2550, 3300}, {1988, 3075}, {1920, 1080}, {3840, 2160}, {1080, 1350}};
         String[] names = {"Screen size", "Screen size (landscape)", "Square", "iPad Procreate default", "A4 @ 300 dpi", "US Letter @ 300 dpi",
                 "Comic page @ 300 dpi", "HD 1920×1080", "4K", "Instagram portrait"};
-        PopupMenu m = new PopupMenu(this, anchor);
+        Ui.PopMenu m = new Ui.PopMenu(this, anchor);
         for (int i = 0; i < names.length; i++) m.getMenu().add(0, i, i, names[i] + "   " + sizes[i][0] + "×" + sizes[i][1]);
         m.getMenu().add(0, 99, 99, "Custom size…");
         m.setOnMenuItemClickListener(it -> {
@@ -1999,7 +2364,7 @@ public class MainActivity extends Activity {
     }
 
     private void galleryItemMenu(View anchor, String id) {
-        PopupMenu m = new PopupMenu(this, anchor);
+        Ui.PopMenu m = new Ui.PopMenu(this, anchor);
         m.getMenu().add(0, 1, 0, "Rename");
         m.getMenu().add(0, 2, 1, "Duplicate");
         m.getMenu().add(0, 3, 2, "Delete");
@@ -2076,7 +2441,7 @@ public class MainActivity extends Activity {
     }
 
     private void timelapseMenu(View anchor) {
-        PopupMenu m = new PopupMenu(this, anchor);
+        Ui.PopMenu m = new Ui.PopMenu(this, anchor);
         m.getMenu().add(0, 1, 0, "Time-lapse replay");
         m.getMenu().add(0, 2, 1, "Export time-lapse: full length (MP4)");
         m.getMenu().add(0, 3, 2, "Export time-lapse: 30 seconds (MP4)");
@@ -2161,7 +2526,7 @@ public class MainActivity extends Activity {
 
     private void loadSelectionMenu(View anchor) {
         if (savedSel.isEmpty()) { toast("No saved selections"); return; }
-        PopupMenu m = new PopupMenu(this, anchor);
+        Ui.PopMenu m = new Ui.PopMenu(this, anchor);
         for (int i = 0; i < savedSel.size(); i++) m.getMenu().add(0, i, i, "Load selection " + (i + 1));
         m.getMenu().add(0, 999, 999, "Delete all saved selections");
         m.setOnMenuItemClickListener(it -> {

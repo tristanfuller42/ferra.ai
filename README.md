@@ -42,7 +42,13 @@ Layout matches Procreate so you can switch between the two easily:
 Inkwell opens in the Gallery like Procreate. ＋ New (size presets), Import (any supported file), tap to open,
 long-press to rename, duplicate or delete. Drawings save automatically.
 
-- **Brushes**: tap the active brush button (or Erase) again to pick a brush and set brush opacity.
+- **Brush Library**: tap the active brush/smudge/eraser button. Brush sets on the left (Inking, Sketching,
+  Airbrushing, Imported), previews on the right. ＋ makes a new brush; long-press a brush to duplicate, reset or delete.
+- **Brush Studio**: tap the selected brush again. Settings per brush, saved: Stroke path (spacing, size/opacity jitter,
+  scatter), Stabilization (StreamLine smoothing, stabilization), Taper (start/end), Shape (roundness, angle, rotate
+  with stroke, hardness), Grain (depth, scale), Dynamics (pressure → size/opacity, pressure curve), Properties
+  (maximum size/opacity), About (name, set). Live preview; Cancel restores.
+- **Menus** are Procreate-style popovers. Actions has tabs: Add, Canvas, Share, Video, Prefs, Help.
   - Size only from pressure: Ink pen, Brush pen (strong taper), Fine liner (no pressure), Marker (see-through).
   - Size + opacity from pressure: Dry ink, HB pencil, 6B pencil, Charcoal (paper grain), Soft shading, Airbrush.
   - Opacity only from pressure: Hard round.
