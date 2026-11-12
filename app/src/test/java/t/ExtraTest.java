@@ -1,6 +1,6 @@
 package t;
 
-import ai.inkwell.*;
+import app.inkwell.*;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.view.MotionEvent;

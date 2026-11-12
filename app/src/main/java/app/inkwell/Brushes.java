@@ -1,4 +1,4 @@
-package ai.inkwell;
+package app.inkwell;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;

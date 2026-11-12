@@ -1,6 +1,6 @@
 package t;
 
-import ai.inkwell.*;
+import app.inkwell.*;
 import android.app.Activity;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;

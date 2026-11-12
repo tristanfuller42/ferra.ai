@@ -1,4 +1,4 @@
-package ai.inkwell;
+package app.inkwell;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -409,15 +409,61 @@ public class MainActivity extends Activity {
         row.addView(swap);
         box.addView(row);
 
+        // units: pixels, inches or centimetres (inches/cm use the DPI to get pixels)
+        int[] unit = {prefs.getInt("unit", 0)};
+        android.widget.EditText dpiIn = number(prefs.getInt("dpi", 300));
+        java.util.function.ToIntFunction<android.widget.EditText> px = e -> {
+            double v;
+            try { v = Double.parseDouble(e.getText().toString().replace(',', '.')); } catch (Exception ex) { return -1; }
+            int dpi = parse(dpiIn);
+            if (unit[0] == 0) return (int) Math.round(v);
+            if (dpi <= 0) return -1;
+            return (int) Math.round(unit[0] == 1 ? v * dpi : v / 2.54 * dpi);
+        };
+        java.util.function.BiConsumer<android.widget.EditText, Integer> showPx = (e, v) -> {
+            int dpi = Math.max(1, parse(dpiIn));
+            if (unit[0] == 0) { e.setText(String.valueOf(v)); return; }
+            double u = unit[0] == 1 ? v / (double) dpi : v * 2.54 / dpi;
+            e.setText(String.valueOf(Math.round(u * 100) / 100.0).replaceAll("\\.0$", ""));
+        };
+        Runnable setInput = () -> {
+            int t = unit[0] == 0 ? android.text.InputType.TYPE_CLASS_NUMBER
+                    : android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL;
+            wIn.setInputType(t); hIn.setInputType(t);
+        };
+        LinearLayout ur = barRow();
+        TextView[] uc = new TextView[3];
+        String[] un = {"Pixels", "Inches", "Centimetres"};
+        TextView dl = new TextView(this);
+        dl.setText("   DPI ");
+        for (int i = 0; i < 3; i++) {
+            int k = i;
+            uc[i] = chip(ur, un[i], unit[0] == i, v -> {
+                int w = px.applyAsInt(wIn), h = px.applyAsInt(hIn);
+                unit[0] = k;
+                prefs.edit().putInt("unit", k).apply();
+                for (int j = 0; j < 3; j++) uc[j].setBackgroundColor(j == k ? Ui.ACCENT : 0);
+                setInput.run();
+                if (w > 0) showPx.accept(wIn, w);
+                if (h > 0) showPx.accept(hIn, h);
+            });
+        }
+        ur.addView(dl);
+        ur.addView(dpiIn, new LinearLayout.LayoutParams((int) (64 * dp), -2));
+        box.addView(ur);
+        setInput.run();
+        showPx.accept(wIn, canvas.docW);
+        showPx.accept(hIn, canvas.docH);
+
         TextView info = new TextView(this);
         info.setPadding(0, 0, 0, p);
         box.addView(info);
         Runnable upd = () -> {
-            int w = parse(wIn), h = parse(hIn);
-            long px = (long) w * h;
-            info.setText(w <= 0 || h <= 0 ? "Enter a width and height in pixels"
-                    : px > MAX_PIXELS ? "Too big: max about 9 megapixels (" + px / 100000 / 10f + " MP)"
-                    : String.format("%.1f megapixels · about %d layers", px / 1e6, layerCap(w, h)));
+            int w = px.applyAsInt(wIn), h = px.applyAsInt(hIn);
+            long n = (long) w * h;
+            info.setText(w <= 0 || h <= 0 ? "Enter a width and height"
+                    : n > MAX_PIXELS ? w + " × " + h + " px is too big: max about 9 megapixels (" + n / 100000 / 10f + " MP)"
+                    : String.format("%d × %d px · %.1f megapixels · about %d layers", w, h, n / 1e6, layerCap(w, h)));
         };
         android.text.TextWatcher tw = new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
@@ -426,6 +472,7 @@ public class MainActivity extends Activity {
         };
         wIn.addTextChangedListener(tw);
         hIn.addTextChangedListener(tw);
+        dpiIn.addTextChangedListener(tw);
         upd.run();
 
         for (Object[] pr : presets) {
@@ -433,7 +480,7 @@ public class MainActivity extends Activity {
             t.setText(pr[0] + "   " + pr[1] + " × " + pr[2]);
             t.setPadding(p / 2, p * 2 / 3, p / 2, p * 2 / 3);
             t.setTextSize(15);
-            t.setOnClickListener(v -> { wIn.setText(String.valueOf(pr[1])); hIn.setText(String.valueOf(pr[2])); });
+            t.setOnClickListener(v -> { showPx.accept(wIn, (Integer) pr[1]); showPx.accept(hIn, (Integer) pr[2]); });
             box.addView(t);
         }
         android.widget.CheckBox scale = new android.widget.CheckBox(this);
@@ -448,14 +495,16 @@ public class MainActivity extends Activity {
                 .setNeutralButton("Resize current", null)
                 .setNegativeButton("Cancel", null).show();
         d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            int w = parse(wIn), h = parse(hIn);
+            int w = px.applyAsInt(wIn), h = px.applyAsInt(hIn);
             if (!valid(w, h)) return;
+            prefs.edit().putInt("dpi", Math.max(1, parse(dpiIn))).apply();
             d.dismiss();
             confirm("Start a new " + w + " × " + h + " drawing? The current one is replaced.", () -> newDocument(w, h));
         });
         d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
-            int w = parse(wIn), h = parse(hIn);
+            int w = px.applyAsInt(wIn), h = px.applyAsInt(hIn);
             if (!valid(w, h)) return;
+            prefs.edit().putInt("dpi", Math.max(1, parse(dpiIn))).apply();
             if ((long) layerCap(w, h) < canvas.layers.size()) { toast("Too many layers for that size"); return; }
             d.dismiss();
             confirm("Resize to " + w + " × " + h + "? Undo history is cleared.", () -> canvas.resizeDocument(w, h, scale.isChecked()));

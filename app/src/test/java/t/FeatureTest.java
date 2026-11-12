@@ -1,6 +1,6 @@
 package t;
 
-import ai.inkwell.*;
+import app.inkwell.*;
 import android.graphics.Bitmap;
 import android.view.MotionEvent;
 import android.view.View;
@@ -224,8 +224,8 @@ public class FeatureTest extends Base {
         cv.groups.get(cv.cur().group).name = "Folder";
         ByteArrayOutputStream o = new ByteArrayOutputStream();
         Bitmap flat = cv.flatten();
-        call(Class.forName("ai.inkwell.Psd"), "write", o, cv.docW, cv.docH, cv.layers, cv.groups, flat);
-        Object doc = callStatic("ai.inkwell.Psd", "read", new ByteArrayInputStream(o.toByteArray()), 100_000_000L);
+        call(Class.forName("app.inkwell.Psd"), "write", o, cv.docW, cv.docH, cv.layers, cv.groups, flat);
+        Object doc = callStatic("app.inkwell.Psd", "read", new ByteArrayInputStream(o.toByteArray()), 100_000_000L);
         List<CanvasView.Layer> ls = (List<CanvasView.Layer>) get(doc, "layers");
         Map<Integer, CanvasView.Group> gs = (Map<Integer, CanvasView.Group>) get(doc, "groups");
         assertEquals(2, ls.size());
@@ -284,9 +284,9 @@ public class FeatureTest extends Base {
         ByteArrayOutputStream o = new ByteArrayOutputStream();
         int n = cv.layers.size();
         Object frames = java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
-                new Class[]{Class.forName("ai.inkwell.Video$Frames")}, (pr, m, a) ->
+                new Class[]{Class.forName("app.inkwell.Video$Frames")}, (pr, m, a) ->
                         m.getName().equals("count") ? n : cv.renderFrame((Integer) a[0], 200, 240));
-        call(Class.forName("ai.inkwell.Video"), "gif", o, 200, 240, 12, frames);
+        call(Class.forName("app.inkwell.Video"), "gif", o, 200, 240, 12, frames);
         byte[] g = o.toByteArray();
         assertEquals("GIF89a", new String(g, 0, 6, "US-ASCII"));
         assertEquals("ends with trailer", 0x3B, g[g.length - 1]);
@@ -514,7 +514,7 @@ public class FeatureTest extends Base {
     }
 
     static Object latest() {
-        try { java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui$Pop").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
+        try { java.lang.reflect.Field f = Class.forName("app.inkwell.Ui$Pop").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
         catch (Exception e) { throw new RuntimeException(e); }
     }
 

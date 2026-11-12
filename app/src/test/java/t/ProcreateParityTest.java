@@ -1,6 +1,6 @@
 package t;
 
-import ai.inkwell.*;
+import app.inkwell.*;
 import android.graphics.Bitmap;
 import android.view.MotionEvent;
 import android.view.View;
@@ -107,7 +107,7 @@ public class ProcreateParityTest extends Base {
     }
 
     Object latestPop() {
-        try { java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui$Pop").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
+        try { java.lang.reflect.Field f = Class.forName("app.inkwell.Ui$Pop").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
         catch (Exception e) { throw new RuntimeException(e); }
     }
 
@@ -127,7 +127,7 @@ public class ProcreateParityTest extends Base {
 
     Object Ui_openPop() {
         try {
-            java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui$Pop").getDeclaredField("open"); f.setAccessible(true);
+            java.lang.reflect.Field f = Class.forName("app.inkwell.Ui$Pop").getDeclaredField("open"); f.setAccessible(true);
             for (Object p : (List<?>) f.get(null)) if (get(p, "c") == act && ((android.widget.PopupWindow) get(p, "win")).isShowing()) return p;
             return null;
         } catch (Exception e) { throw new RuntimeException(e); }

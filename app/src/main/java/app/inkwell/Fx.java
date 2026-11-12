@@ -1,4 +1,4 @@
-package ai.inkwell;
+package app.inkwell;
 
 /**
  * Pixel effects on greyscale ARGB arrays (unpremultiplied, R=G=B).

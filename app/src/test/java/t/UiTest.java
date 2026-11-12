@@ -1,13 +1,15 @@
 package t;
 
-import ai.inkwell.*;
+import app.inkwell.*;
 import android.app.Dialog;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.view.MotionEvent;
 import android.view.View;
+import android.widget.TextView;
 import org.junit.Before;
 import org.junit.Test;
+import java.util.*;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.Shadows;
@@ -55,13 +57,62 @@ public class UiTest extends Base {
         call(act, "animSettings"); dialogShot("34_anim_settings");
     }
 
+    @Test public void canvas_size_in_inches_and_cm() {
+        call(act, "canvasDialog");
+        Dialog d = ShadowDialog.getLatestDialog();
+        View root = d.getWindow().getDecorView();
+        find(root, "Inches").performClick();
+        List<android.widget.EditText> in = edits(root, new ArrayList<>());
+        in.get(0).setText("8.5"); in.get(1).setText("11"); in.get(2).setText("300");
+        assertNotNull("info shows pixels", find(root, "2550 × 3300 px · 8.4 megapixels", true));
+        ((android.app.AlertDialog) d).getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();
+        settle();
+        ((android.app.AlertDialog) ShadowDialog.getLatestDialog()).getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();
+        settle();
+        assertEquals(2550, cv.docW); assertEquals(3300, cv.docH);
+        // centimetres: the current size converts, A4 gives the A4 pixel size
+        call(act, "canvasDialog");
+        d = ShadowDialog.getLatestDialog(); root = d.getWindow().getDecorView();
+        find(root, "Centimetres").performClick();
+        in = edits(root, new ArrayList<>());
+        assertEquals("21.59", in.get(0).getText().toString());
+        in.get(0).setText("21"); in.get(1).setText("29.7");
+        dialogShot("35_canvas_cm");
+        call(act, "canvasDialog");
+        d = ShadowDialog.getLatestDialog(); root = d.getWindow().getDecorView();
+        in = edits(root, new ArrayList<>());
+        in.get(0).setText("21"); in.get(1).setText("29.7");
+        assertNotNull(find(root, "2480 × 3508 px", true));
+        find(root, "Pixels").performClick();
+        assertEquals("2480", in.get(0).getText().toString());
+        d.dismiss();
+    }
+
+    static View find(View v, String text) { return find(v, text, false); }
+    static View find(View v, String text, boolean prefix) {
+        if (v instanceof TextView && !(v instanceof android.widget.EditText)) {
+            String t = String.valueOf(((TextView) v).getText());
+            if (prefix ? t.startsWith(text) : t.equals(text)) return v;
+        }
+        if (v instanceof android.view.ViewGroup) for (int i = 0; i < ((android.view.ViewGroup) v).getChildCount(); i++) {
+            View r = find(((android.view.ViewGroup) v).getChildAt(i), text, prefix);
+            if (r != null) return r;
+        }
+        return null;
+    }
+    static List<android.widget.EditText> edits(View v, List<android.widget.EditText> out) {
+        if (v instanceof android.widget.EditText) out.add((android.widget.EditText) v);
+        if (v instanceof android.view.ViewGroup) for (int i = 0; i < ((android.view.ViewGroup) v).getChildCount(); i++) edits(((android.view.ViewGroup) v).getChildAt(i), out);
+        return out;
+    }
+
     static Object latestPopMenu() {
-        try { java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui$PopMenu").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
+        try { java.lang.reflect.Field f = Class.forName("app.inkwell.Ui$PopMenu").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
         catch (Exception e) { throw new RuntimeException(e); }
     }
 
     static Object latestPop() {
-        try { java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui$Pop").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
+        try { java.lang.reflect.Field f = Class.forName("app.inkwell.Ui$Pop").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
         catch (Exception e) { throw new RuntimeException(e); }
     }
 
