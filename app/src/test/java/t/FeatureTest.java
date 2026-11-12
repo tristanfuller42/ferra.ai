@@ -646,4 +646,42 @@ public class FeatureTest extends Base {
         assertEquals(120, cv.vpRays);
         assertEquals(0.6f, cv.guideOpacity, 0.001f);
     }
+
+    @Test public void horizon_level_offcanvas_points_and_handle() {
+        cv.guide = 8; cv.resetVps();
+        call(act, "guideEditor");
+        settle();
+        // drag point 0 up: horizon stays straight
+        float[] p0 = vpScreen(0);
+        line(p0[0], p0[1], p0[0] + 20, p0[1] - 150);
+        assertEquals("horizon level", cv.vp[1], cv.vp[3], 0.01f);
+        // drag a point far outside the canvas, then show all and grab it again
+        float[] p1 = vpScreen(1);
+        line(p1[0], p1[1], W - 2, p1[1]);                  // to the right edge of the view (outside the paper)
+        cv.fitGuide();
+        ShadowLooper.idleMainLooper(400, java.util.concurrent.TimeUnit.MILLISECONDS);
+        p1 = vpScreen(1);
+        line(p1[0], p1[1], W - 2, p1[1]);                  // and further out again
+        assertTrue("point is well outside the canvas: " + cv.vp[2], cv.vp[2] > cv.docW * 1.3f);
+        cv.fitGuide();
+        ShadowLooper.idleMainLooper(400, java.util.concurrent.TimeUnit.MILLISECONDS);
+        float[] again = vpScreen(1);
+        assertTrue("visible after Show all points", again[0] > 0 && again[0] < W && again[1] > 0 && again[1] < H);
+        settle();
+        shot("65_points_outside_canvas");
+        // horizon handle moves both points
+        float[] m = (float[]) call(cv, "horizonHandle");
+        ((android.graphics.Matrix) get(cv, "view")).mapPoints(m);
+        float y0 = cv.vp[1];
+        line(m[0], m[1], m[0], m[1] + 60);
+        assertTrue("horizon moved", cv.vp[1] > y0 + 10);
+        assertEquals("still level", cv.vp[1], cv.vp[3], 0.01f);
+        cv.undo();
+        assertEquals("undo", y0, cv.vp[1], 0.5f);
+        // tilt allowed when switched on
+        cv.horizonLevel = false;
+        p0 = vpScreen(0);
+        line(p0[0], p0[1], p0[0], p0[1] - 80);
+        assertTrue("tilted", Math.abs(cv.vp[1] - cv.vp[3]) > 10);
+    }
 }

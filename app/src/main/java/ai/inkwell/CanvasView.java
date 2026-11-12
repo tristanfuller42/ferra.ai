@@ -337,6 +337,7 @@ public class CanvasView extends View {
     public float[] vp = new float[6];
     public float guideOpacity = 0.35f, guideThick = 1.5f; // guide look (thickness in screen pixels)
     public int vpRays = 36;                                // lines drawn from each vanishing point
+    public boolean horizonLevel = true;                    // keep the horizon straight unless the user tilts it
 
     private int guideColor(float mul) {
         return ((int) (255 * Math.min(1f, guideOpacity * mul)) << 24) | 0x3D9BFF;
@@ -797,15 +798,7 @@ public class CanvasView extends View {
                     double a = Math.PI * 2 * r / vpRays;
                     c.drawLine(vp[k * 2], vp[k * 2 + 1], vp[k * 2] + (float) Math.cos(a) * big, vp[k * 2 + 1] + (float) Math.sin(a) * big, g);
                 }
-            g.setColor(guideColor(2.2f));
-            if (n == 1) c.drawLine(-big, vp[1], big, vp[1], g);
-            else { // horizon through the first two points
-                float dx = vp[2] - vp[0], dy = vp[3] - vp[1], len = (float) Math.hypot(dx, dy) + 1e-3f;
-                c.drawLine(vp[0] - dx / len * big, vp[1] - dy / len * big, vp[0] + dx / len * big, vp[1] + dy / len * big, g);
-            }
-            g.setStyle(Paint.Style.FILL);
-            for (int k = 0; k < n; k++) c.drawCircle(vp[k * 2], vp[k * 2 + 1], (editGuide ? 14 : 7) / sc, g);
-            g.setStyle(Paint.Style.STROKE);
+            // horizon line and the points are drawn after the canvas clip (see drawPerspectiveHandles)
         } else if (guide == 1) { // grid
             g.setColor(guideColor(1));
             for (int x = gridSize; x < docW; x += gridSize) c.drawLine(x, 0, x, docH, g);
@@ -840,6 +833,7 @@ public class CanvasView extends View {
             c.drawLine(x, y - 12 / sc, x, y + 12 / sc, g);
         }
         c.restore();
+        if (guide >= 7) drawPerspectiveHandles(c);
         if (onFrame != null) onFrame.run();
         if (tool == MOVE && moving) { // transform box + handles (screen space)
             float[] q = handlePoints();
@@ -1122,7 +1116,87 @@ public class CanvasView extends View {
         pt[0] = asX + adX * t; pt[1] = asY + adY * t;
     }
 
+    /** Horizon line, vanishing points and the horizon handle, drawn beyond the canvas edge too. */
+    private void drawPerspectiveHandles(Canvas c) {
+        float sc = view.mapRadius(1f), d = getResources().getDisplayMetrics().density;
+        int n = guide - 6;
+        float big = 6 * (float) Math.hypot(docW, docH);
+        c.save();
+        c.concat(view);
+        Paint g = new Paint(Paint.ANTI_ALIAS_FLAG);
+        g.setStyle(Paint.Style.STROKE);
+        g.setStrokeWidth(Math.max(1.5f, guideThick) / sc);
+        g.setColor(guideColor(2.4f) | 0x66000000);
+        float[] h = horizon();
+        c.drawLine(h[0] - h[2] * big, h[1] - h[3] * big, h[0] + h[2] * big, h[1] + h[3] * big, g);
+        float r = (editGuide ? 11 : 6) * d / sc;
+        for (int k = 0; k < n; k++) {
+            g.setStyle(Paint.Style.FILL);
+            g.setColor(0xFF3D9BFF);
+            c.drawCircle(vp[k * 2], vp[k * 2 + 1], r, g);
+            g.setStyle(Paint.Style.STROKE);
+            g.setStrokeWidth(2 * d / sc);
+            g.setColor(Color.WHITE);
+            c.drawCircle(vp[k * 2], vp[k * 2 + 1], r, g);
+        }
+        if (editGuide && n >= 2) { // horizon handle in the middle
+            float[] m = horizonHandle();
+            g.setStyle(Paint.Style.FILL);
+            g.setColor(Color.WHITE);
+            c.drawRect(m[0] - r * 0.8f, m[1] - r * 0.8f, m[0] + r * 0.8f, m[1] + r * 0.8f, g);
+            g.setStyle(Paint.Style.STROKE);
+            g.setColor(0xFF3D9BFF);
+            c.drawRect(m[0] - r * 0.8f, m[1] - r * 0.8f, m[0] + r * 0.8f, m[1] + r * 0.8f, g);
+        }
+        c.restore();
+    }
+
+    /** Horizon as point + unit direction: through the first two points, or level through the single point. */
+    private float[] horizon() {
+        if (guide - 6 < 2) return new float[]{vp[0], vp[1], 1, 0};
+        float dx = vp[2] - vp[0], dy = vp[3] - vp[1], len = (float) Math.hypot(dx, dy);
+        if (len < 1e-3f) return new float[]{vp[0], vp[1], 1, 0};
+        return new float[]{vp[0], vp[1], dx / len, dy / len};
+    }
+
+    /** The middle of the horizon, kept on screen-ish so it can always be grabbed. */
+    private float[] horizonHandle() {
+        float[] h = horizon();
+        float mx = (vp[0] + vp[2]) / 2, my = (vp[1] + vp[3]) / 2;
+        // slide along the horizon towards the canvas centre so it stays reachable
+        float t = (docW / 2f - mx) * h[2] + (docH / 2f - my) * h[3];
+        return new float[]{mx + h[2] * t, my + h[3] * t};
+    }
+
+    public int fitInsetBottom;
+
+    /** Zooms so the canvas and every vanishing point are visible. */
+    public void fitGuide() {
+        if (guide < 7) { animateFit(); return; }
+        RectF r = new RectF(0, 0, docW, docH);
+        for (int k = 0; k < guide - 6; k++) r.union(vp[k * 2], vp[k * 2 + 1]);
+        r.inset(-r.width() * 0.08f, -r.height() * 0.08f);
+        float avH = Math.max(1, getHeight() - fitInsetBottom); // space above the editor bar
+        float s = Math.min(getWidth() / r.width(), avH / r.height());
+        Matrix m = new Matrix();
+        m.setScale(s, s);
+        m.postTranslate((getWidth() - r.width() * s) / 2f - r.left * s, (avH - r.height() * s) / 2f - r.top * s);
+        float[] a = new float[9], b = new float[9], cc = new float[9];
+        view.getValues(a);
+        m.getValues(b);
+        android.animation.ValueAnimator va = android.animation.ValueAnimator.ofFloat(0f, 1f);
+        va.setDuration(250);
+        va.addUpdateListener(an -> {
+            float t = (float) an.getAnimatedValue();
+            for (int k = 0; k < 9; k++) cc[k] = a[k] + (b[k] - a[k]) * t;
+            view.setValues(cc);
+            invalidate();
+        });
+        va.start();
+    }
+
     private float vpDownX, vpDownY;
+    private float[] vpGrab = new float[2];
     private boolean vpMoved;
     private float[] vpBefore;
 
@@ -1145,18 +1219,31 @@ public class CanvasView extends View {
                 float d = (float) Math.hypot(f[0] - vp[k * 2], f[1] - vp[k * 2 + 1]);
                 if (d < best) { best = d; dragVp = k; }
             }
+            if (n >= 2) { // horizon handle
+                float[] m = horizonHandle();
+                if (Math.hypot(f[0] - m[0], f[1] - m[1]) < best) { dragVp = -2; vpGrab = new float[]{f[0], f[1]}; }
+            }
         } else if (action == MotionEvent.ACTION_MOVE) {
             if (Math.hypot(e.getX() - vpDownX, e.getY() - vpDownY) > 8 * getResources().getDisplayMetrics().density) vpMoved = true;
-            if (dragVp >= 0 && vpMoved) { vp[dragVp * 2] = f[0]; vp[dragVp * 2 + 1] = f[1]; invalidate(); }
+            if (dragVp == -2 && vpMoved) { // move the whole horizon (both points) up/down, or along with the finger if tilted
+                float dy = f[1] - vpGrab[1], dx = horizonLevel ? 0 : f[0] - vpGrab[0];
+                vp[0] = vpBefore[0] + dx; vp[1] = vpBefore[1] + dy; vp[2] = vpBefore[2] + dx; vp[3] = vpBefore[3] + dy;
+                invalidate();
+            } else if (dragVp >= 0 && vpMoved) {
+                vp[dragVp * 2] = f[0]; vp[dragVp * 2 + 1] = f[1];
+                if (horizonLevel && n >= 2 && dragVp < 2) vp[(1 - dragVp) * 2 + 1] = f[1]; // keep the horizon straight
+                invalidate();
+            }
         } else if (action == MotionEvent.ACTION_UP) {
             int gBefore = guide;
-            if (dragVp >= 0 && !vpMoved && n > 1) { // tap a point: delete it
+            if (dragVp == -2) { /* horizon handle: nothing on tap */ }
+            else if (dragVp >= 0 && !vpMoved && n > 1) { // tap a point: delete it
                 float[] nv = new float[6];
                 for (int k = 0, j = 0; k < n; k++) if (k != dragVp) { nv[j * 2] = vp[k * 2]; nv[j * 2 + 1] = vp[k * 2 + 1]; j++; }
                 vp = nv;
                 guide = 6 + n - 1;
-            } else if (dragVp < 0 && !vpMoved && n < 3) { // tap empty canvas: add a point
-                vp[n * 2] = f[0]; vp[n * 2 + 1] = f[1];
+            } else if (dragVp == -1 && !vpMoved && n < 3) { // tap empty canvas: add a point
+                vp[n * 2] = f[0]; vp[n * 2 + 1] = (horizonLevel && n == 1) ? vp[1] : f[1]; // 2nd point sits on the horizon
                 guide = 6 + n + 1;
             }
             if (guide != gBefore || !java.util.Arrays.equals(vp, vpBefore)) guideEdit(vpBefore, gBefore);
@@ -1180,6 +1267,7 @@ public class CanvasView extends View {
         sb.append(guide).append(',').append(gridSize).append(',').append(assist).append(',')
           .append(guideOpacity).append(',').append(guideThick).append(',').append(vpRays);
         for (float v : vp) sb.append(',').append(v);
+        sb.append(',').append(horizonLevel);
         return sb.toString();
     }
 
@@ -1189,6 +1277,7 @@ public class CanvasView extends View {
             guide = Integer.parseInt(v[0]); gridSize = Integer.parseInt(v[1]); assist = Boolean.parseBoolean(v[2]);
             guideOpacity = Float.parseFloat(v[3]); guideThick = Float.parseFloat(v[4]); vpRays = Integer.parseInt(v[5]);
             for (int i = 0; i < 6; i++) vp[i] = Float.parseFloat(v[6 + i]);
+            horizonLevel = v.length <= 12 || Boolean.parseBoolean(v[12]);
         } catch (Exception ignored) { }
         invalidate();
     }

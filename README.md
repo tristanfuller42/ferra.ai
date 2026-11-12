@@ -30,7 +30,9 @@ Layout matches Procreate so you can switch between the two easily:
 - **Text**: Actions → Add text.
 - **Drawing guides** (Actions → Canvas → Edit drawing guide): editor with 2D Grid, Isometric, Perspective, Symmetry;
   opacity, thickness, grid size, lines per vanishing point (6–180). Perspective: tap to add a point (up to 3), tap a
-  point to delete it, drag to move; every change can be undone. Saved with each drawing.
+  point to delete it, drag to move (also far outside the canvas; "Show all points" zooms out to fit them).
+  The horizon stays level unless you switch on Tilt horizon; the square handle moves it up/down.
+  Every change can be undone. Saved with each drawing.
   Earlier summary: perspective (1/2/3-point); symmetry vertical,
   horizontal, quadrant, radial. **Drawing assist** locks strokes to the guide lines.
 - **Transform modes**: Uniform, Freeform (stretch with edge/corner handles), Distort, Warp (4×4 mesh).

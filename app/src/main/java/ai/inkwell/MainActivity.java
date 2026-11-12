@@ -460,7 +460,7 @@ public class MainActivity extends Activity {
         canvas.docW = w; canvas.docH = h;
         canvas.setDocument(w, h, java.util.Collections.singletonList(canvas.newLayer("Layer 1")));
         canvas.guide = 0; canvas.assist = false; canvas.editGuide = false; // each new drawing starts without a guide
-        canvas.guideOpacity = 0.35f; canvas.guideThick = 1.5f; canvas.vpRays = 36; canvas.gridSize = 100;
+        canvas.guideOpacity = 0.35f; canvas.guideThick = 1.5f; canvas.vpRays = 36; canvas.gridSize = 100; canvas.horizonLevel = true;
         if (bottom != null && canvas.tool != CanvasView.SELECT && canvas.tool != CanvasView.MOVE) bottom.setVisibility(View.GONE);
     }
 
@@ -937,11 +937,32 @@ public class MainActivity extends Activity {
         if (tab == 1 || tab == 2) box.addView(slider("Grid size", canvas.gridSize, 8, 600, v -> { canvas.gridSize = v; canvas.invalidate(); }));
         if (tab == 3) {
             TextView hint = new TextView(this);
-            hint.setText("Tap the canvas to add a vanishing point (up to 3) · tap a point to delete it · drag to move · undo works");
+            hint.setText("Tap: add point (max 3) · tap point: delete · drag: move, even off the canvas · ▢ moves the horizon");
             hint.setTextColor(0xFF9A9A9E);
             hint.setTextSize(13);
             box.addView(hint);
             box.addView(slider("Lines per point", canvas.vpRays, 6, 180, v -> { canvas.vpRays = v; canvas.invalidate(); }));
+            LinearLayout hz = barRow();
+            android.widget.Switch tilt = new android.widget.Switch(this);
+            tilt.setText("Tilt horizon  ");
+            tilt.setTextColor(Color.WHITE);
+            tilt.setChecked(!canvas.horizonLevel);
+            tilt.setOnCheckedChangeListener((b, on) -> {
+                canvas.horizonLevel = !on;
+                if (!on && canvas.guide >= 8) { // straighten: both points at the average height
+                    float[] before = canvas.vp.clone();
+                    float y = (canvas.vp[1] + canvas.vp[3]) / 2;
+                    canvas.vp[1] = y; canvas.vp[3] = y;
+                    canvas.guideEdit(before, canvas.guide);
+                }
+                canvas.invalidate();
+            });
+            hz.addView(tilt);
+            chip(hz, "Show all points", false, v -> {
+                canvas.fitInsetBottom = bottom.getVisibility() == View.VISIBLE ? bottom.getHeight() + (int) (16 * dp) : 0;
+                canvas.fitGuide();
+            });
+            box.addView(hz);
         }
         if (tab == 4) {
             LinearLayout sym = barRow();
