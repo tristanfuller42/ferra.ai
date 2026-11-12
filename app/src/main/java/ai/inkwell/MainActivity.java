@@ -121,7 +121,7 @@ public class MainActivity extends Activity {
         canvas.onGreyPicked = this::updateColor;
 
         // ---- Top bar: actions on the left, painting tools on the right ----
-        prefs = getSharedPreferences("inkwell", MODE_PRIVATE);  // internal name kept so settings survive the rename
+        prefs = getSharedPreferences("inkwell", MODE_PRIVATE);
         int uiSize = prefs.getInt("uiSize", 1);                  // 0 small, 1 medium, 2 large
         int ib = (int) ((uiSize == 0 ? 38 : uiSize == 2 ? 52 : 44) * dp);
         LinearLayout left = new LinearLayout(this), right = new LinearLayout(this);
