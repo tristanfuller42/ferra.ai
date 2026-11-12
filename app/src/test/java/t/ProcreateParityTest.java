@@ -47,11 +47,8 @@ public class ProcreateParityTest extends Base {
         assertNotNull(row);
         t0 = android.os.SystemClock.uptimeMillis();
         int[] loc = new int[2]; row.getLocationOnScreen(loc);
-        float rx = loc[0] + 50, ry = loc[1] + row.getHeight() / 2f;
-        row.dispatchTouchEvent(evRaw(MotionEvent.ACTION_DOWN, rx, ry));
-        row.dispatchTouchEvent(evRaw(MotionEvent.ACTION_MOVE, rx + 200, ry));
-        row.dispatchTouchEvent(evRaw(MotionEvent.ACTION_UP, rx + 200, ry));
-        settle();
+        float rx = loc[0] + 20, ry = loc[1] + row.getHeight() / 2f; // starts on the thumbnail
+        swipe(rx, ry, 260);
         assertEquals("swipe right selects", 1, ((Set<?>) get(act, "multi")).size());
         shot("70_layers_multiselect");
         // group / merge / delete several
@@ -81,6 +78,24 @@ public class ProcreateParityTest extends Base {
         int[] above = toDoc(W * .45f, H * .2f), between = toDoc(W * .45f, H * .4f);
         assertEquals("fill stays between the reference lines", 255, L().getPixel(between[0], between[1]) >>> 24);
         assertEquals("not past the line", 0, L().getPixel(above[0], above[1]) >>> 24);
+    }
+
+    Object latestPop() {
+        try { java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui$Pop").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
+        catch (Exception e) { throw new RuntimeException(e); }
+    }
+
+    /** A realistic sideways finger swipe through the whole window, with some up/down wobble. */
+    void swipe(float x, float y, float dist) {
+        View d = act.getWindow().getDecorView();
+        t0 = android.os.SystemClock.uptimeMillis();
+        d.dispatchTouchEvent(evRaw(MotionEvent.ACTION_DOWN, x, y));
+        for (int i = 1; i <= 12; i++) {
+            ShadowLooper.idleMainLooper(10, TimeUnit.MILLISECONDS);
+            d.dispatchTouchEvent(evRaw(MotionEvent.ACTION_MOVE, x + dist * i / 12, y + (i % 2 == 0 ? 14 : -10)));
+        }
+        d.dispatchTouchEvent(evRaw(MotionEvent.ACTION_UP, x + dist, y + 6));
+        settle();
     }
 
     MotionEvent evRaw(int action, float x, float y) {

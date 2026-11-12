@@ -1833,7 +1833,9 @@ public class MainActivity extends Activity {
             vis.setOnClickListener(v -> canvas.toggleVisible(idx));
             r.addView(vis);
             r.setOnClickListener(v -> { if (idx == canvas.current) layerOptions(v, idx); else canvas.select(idx); });
-            r.setOnTouchListener(rowGestures(r, l, idx));
+            View.OnTouchListener g = rowGestures(r, l, idx);
+            for (int c = 0; c < r.getChildCount(); c++) if (r.getChildAt(c).isClickable()) r.getChildAt(c).setOnTouchListener(g);
+            r.setOnTouchListener(g);
             layerList.addView(r);
         }
         backgroundRow();
@@ -1861,47 +1863,60 @@ public class MainActivity extends Activity {
             row.setAlpha(0.85f);
             row.getParent().requestDisallowInterceptTouchEvent(true);
         };
+        float slop = 6 * dp; // below the list's own scroll slop, so we decide first
         return (v, e) -> {
+            float dx = e.getRawX() - st[0], dy = e.getRawY() - st[1];
             switch (e.getActionMasked()) {
                 case android.view.MotionEvent.ACTION_DOWN:
                     st[0] = e.getRawX(); st[1] = e.getRawY(); st[2] = 0;
+                    row.removeCallbacks(startDrag);
                     row.postDelayed(startDrag, 380);
                     return false;
-                case android.view.MotionEvent.ACTION_MOVE: {
-                    float dx = e.getRawX() - st[0], dy = e.getRawY() - st[1];
+                case android.view.MotionEvent.ACTION_MOVE:
                     if (st[2] == 1) { row.setTranslationY(dy); return true; }
-                    if (Math.hypot(dx, dy) > 12 * dp) row.removeCallbacks(startDrag);
-                    if (Math.abs(dx) > 48 * dp && Math.abs(dx) > Math.abs(dy) * 2) {
+                    if (st[2] == 0 && Math.hypot(dx, dy) > slop) {
                         row.removeCallbacks(startDrag);
-                        st[2] = 2;
-                        row.getParent().requestDisallowInterceptTouchEvent(true);
-                        if (dx < 0) layerSwipeActions(row, l, idx); // swipe left
-                        else { if (!multi.remove(l)) multi.add(l); refreshPanel(); } // swipe right: select
-                        return true;
+                        if (Math.abs(dx) > Math.abs(dy)) { // sideways: this is a swipe, stop the list from scrolling
+                            st[2] = 2;
+                            row.getParent().requestDisallowInterceptTouchEvent(true);
+                            v.setPressed(false);
+                        } else st[2] = 3; // up/down: let the list scroll
                     }
-                    return st[2] == 2;
-                }
-                default:
+                    if (st[2] == 2) { row.setTranslationX(Math.max(-120 * dp, Math.min(120 * dp, dx))); return true; }
+                    return false;
+                case android.view.MotionEvent.ACTION_UP:
                     row.removeCallbacks(startDrag);
-                    if (st[2] == 1) { // drop: find the row under the finger
-                        int target = idx;
-                        float y = e.getRawY();
-                        for (int c = 0; c < layerList.getChildCount(); c++) {
-                            View ch = layerList.getChildAt(c);
-                            if (!(ch.getTag() instanceof Integer) || ch == row) continue;
-                            int[] loc = new int[2];
-                            ch.getLocationOnScreen(loc);
-                            if (y >= loc[1] && y < loc[1] + ch.getHeight()) target = (Integer) ch.getTag();
-                        }
-                        row.setTranslationY(0);
-                        row.setElevation(0);
-                        row.setAlpha(1);
-                        canvas.moveLayerTo(idx, target);
+                    if (st[2] == 1) { drop(row, idx, e.getRawY()); return true; }
+                    if (st[2] == 2) {
+                        row.setTranslationX(0);
+                        if (dx < -48 * dp) layerSwipeActions(row, l, idx); // swipe left: Lock / Duplicate / Delete
+                        else if (dx > 48 * dp) { if (!multi.remove(l)) multi.add(l); refreshPanel(); } // swipe right: select
                         return true;
                     }
-                    return st[2] == 2;
+                    return false;
+                default: // cancel
+                    row.removeCallbacks(startDrag);
+                    row.setTranslationX(0); row.setTranslationY(0); row.setElevation(0); row.setAlpha(1);
+                    st[2] = 0;
+                    return false;
             }
         };
+    }
+
+    /** Ends a long-press drag: moves the layer to the row under the finger. */
+    private void drop(View row, int idx, float y) {
+        int target = idx;
+        for (int c = 0; c < layerList.getChildCount(); c++) {
+            View ch = layerList.getChildAt(c);
+            if (!(ch.getTag() instanceof Integer) || ch == row) continue;
+            int[] loc = new int[2];
+            ch.getLocationOnScreen(loc);
+            if (y >= loc[1] && y < loc[1] + ch.getHeight()) target = (Integer) ch.getTag();
+        }
+        row.setTranslationY(0);
+        row.setElevation(0);
+        row.setAlpha(1);
+        canvas.moveLayerTo(idx, target);
     }
 
     private void layerSwipeActions(View row, CanvasView.Layer l, int idx) {
