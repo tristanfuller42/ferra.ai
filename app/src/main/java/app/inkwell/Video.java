@@ -191,4 +191,57 @@ final class Video {
             o.write(0);
         }
     }
+
+    // ---------------- Animated PNG (keeps transparency, full grey range) ----------------
+
+    /** Writes an APNG: every frame shown for 1/fps second, looping forever. Frames are greyscale + alpha. */
+    static void apng(OutputStream os, int w, int h, int fps, Frames frames) throws IOException {
+        OutputStream o = new java.io.BufferedOutputStream(os, 65536);
+        o.write(new byte[]{(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'});
+        java.io.ByteArrayOutputStream c = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream d = new java.io.DataOutputStream(c);
+        d.writeInt(w); d.writeInt(h); d.writeByte(8); d.writeByte(4); d.writeByte(0); d.writeByte(0); d.writeByte(0); // grey + alpha
+        chunk(o, "IHDR", c.toByteArray());
+        int n = frames.count();
+        c.reset(); d.writeInt(n); d.writeInt(0); // loop forever
+        chunk(o, "acTL", c.toByteArray());
+        int seq = 0;
+        int[] px = new int[w * h];
+        for (int f = 0; f < n; f++) {
+            Bitmap b = frames.get(f);
+            b.getPixels(px, 0, w, 0, 0, w, h);
+            b.recycle();
+            c.reset();
+            d.writeInt(seq++); d.writeInt(w); d.writeInt(h); d.writeInt(0); d.writeInt(0);
+            d.writeShort(1); d.writeShort(Math.max(1, fps)); d.writeByte(0); d.writeByte(0); // 1/fps s, replace previous frame
+            chunk(o, "fcTL", c.toByteArray());
+            java.io.ByteArrayOutputStream z = new java.io.ByteArrayOutputStream();
+            try (java.util.zip.DeflaterOutputStream dz = new java.util.zip.DeflaterOutputStream(z, new java.util.zip.Deflater(6))) {
+                byte[] row = new byte[1 + w * 2];
+                for (int y = 0; y < h; y++) {
+                    row[0] = 0;
+                    for (int x = 0; x < w; x++) { int p = px[y * w + x]; row[1 + x * 2] = (byte) (p & 255); row[2 + x * 2] = (byte) (p >>> 24); }
+                    dz.write(row);
+                }
+            }
+            if (f == 0) chunk(o, "IDAT", z.toByteArray());
+            else {
+                c.reset(); d.writeInt(seq++); d.write(z.toByteArray());
+                chunk(o, "fdAT", c.toByteArray());
+            }
+        }
+        chunk(o, "IEND", new byte[0]);
+        o.flush();
+    }
+
+    private static void chunk(OutputStream o, String type, byte[] data) throws IOException {
+        java.io.DataOutputStream d = new java.io.DataOutputStream(o);
+        d.writeInt(data.length);
+        byte[] t = type.getBytes("US-ASCII");
+        d.write(t);
+        d.write(data);
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        crc.update(t); crc.update(data);
+        d.writeInt((int) crc.getValue());
+    }
 }

@@ -81,6 +81,17 @@ Layout matches Procreate so you can switch between the two easily:
 - **Drag and drop**: drag images from another app (split screen) onto the canvas (new layer) or the Gallery (new drawing).
 - **Transform**: Rotate 45°, magnetics (with Snapping on: rotation sticks to 15°, size to 25% steps), Advanced mesh warp (5×5).
 - **Gallery**: Sort (manual, name, newest, oldest); Select → Share or Export several (PNG/JPEG/PSD into a folder, or one PDF).
+- **Backup**: Gallery → Backup: everything (drawings, stacks, brushes, fonts, settings) in one .zip; Restore adds what's missing.
+  Uninstalling the app deletes its drawings, so keep a backup in Drive. (Time-lapse recordings are not included.)
+- **Crop & Resize**: Actions → Canvas → Crop & resize. Drag the box (it can go past the canvas edge to extend it),
+  aspect presets, rotate, thirds grid; Settings… for exact numbers.
+- **Brush size preview**: the real brush tip appears next to the size slider while you drag it.
+- **Gallery preview**: pinch out on a drawing, then swipe left/right through the others.
+- **Brush Studio**: Speed → thinner/lighter, Motion filtering (removes shake without lag), Rendering tab:
+  Light/Heavy glaze and blend mode (Multiply, Darken, Lighten, Screen, Overlay).
+- **Drawing Assist per layer**: the guide's Assisted drawing switch (and layer options) applies to the current layer.
+- **Share**: PNG files (each layer, into a folder) and Animated PNG.
+- **Text**: letter spacing, line spacing, underline, outline; layer options → Rasterize text.
 
 ### Gallery
 Inkwell opens in the Gallery like Procreate. ＋ New (size presets), Import (any supported file), tap to open,

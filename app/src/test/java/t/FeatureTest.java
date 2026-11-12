@@ -260,7 +260,7 @@ public class FeatureTest extends Base {
         int[] p = toDoc(W * .32f, H * .3f);
         assertTrue("mirror painted", L().getPixel(cv.docW - 1 - p[0], p[1]) >>> 24 > 100);
         for (int g = 1; g <= 9; g++) {
-            cv.guide = g; cv.assist = true;
+            cv.guide = g; cv.cur().assist = true;
             if (g >= 7) cv.resetVps();
             line(W * .2f, H * .2f, W * .6f, H * .25f);
             cv.invalidate();

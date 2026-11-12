@@ -50,11 +50,12 @@ public class CanvasView extends View {
         public boolean locked, reference; // locked: no changes; reference: fills/auto-select read this layer
         public TextInfo text;             // set while the layer is editable text
         public int hold = 1;              // animation: how many frames this frame is shown
+        public boolean assist;            // Drawing Assist is on for this layer (like Procreate: per layer)
         public Bitmap maskThumb;
         public Layer(Bitmap b, String n) { bmp = b; name = n; }
         void copyProps(Layer o) {
             opacity = o.opacity; visible = o.visible; alphaLock = o.alphaLock; clip = o.clip; blend = o.blend; group = o.group;
-            locked = o.locked; hold = o.hold;
+            locked = o.locked; hold = o.hold; assist = o.assist;
         }
     }
 
@@ -64,6 +65,8 @@ public class CanvasView extends View {
         public float size;
         public boolean bold;
         public int align, grey;           // align: 0 left, 1 centre, 2 right
+        public float spacing, lineSpacing = 1f; // letter spacing (em) and line spacing (× normal)
+        public boolean underline, outline;
         public TextInfo(String t, float size, boolean bold, int align, String font, int grey) {
             text = t; this.size = size; this.bold = bold; this.align = align; this.font = font; this.grey = grey;
         }
@@ -183,12 +186,17 @@ public class CanvasView extends View {
         float curve = 1f;                     // pressure curve: <1 = light touch gives more, >1 = needs more pressure
         float sizeScale = 1f;                 // maximum size relative to the size slider
         float tiltSize, tiltOpacity;          // stylus tilt (pen on its side): wider / lighter strokes
+        float speedSize, speedOpacity;        // fast strokes get thinner / lighter
+        float motionFilter;                   // removes hand shake without StreamLine's lag
+        float render;                         // 0 light glaze (overlaps in one stroke don't build up), 1 heavy glaze (they do)
+        float blend;                          // paint blend: 0 normal, 1 multiply, 2 darken, 3 lighten, 4 screen, 5 overlay
         public boolean builtin;
 
         /** All adjustable settings as named values (used by Brush Studio, saving, reset). */
         static final String[] KEYS = {"spacing", "streamline", "stabilize", "taperStart", "taperEnd", "jitterSize",
                 "jitterOpacity", "scatter", "hard", "roundness", "angle", "follow", "grain", "grainScale",
-                "minSize", "minAlpha", "curve", "alpha", "sizeScale", "tiltSize", "tiltOpacity"};
+                "minSize", "minAlpha", "curve", "alpha", "sizeScale", "tiltSize", "tiltOpacity",
+                "speedSize", "speedOpacity", "motionFilter", "render", "blend"};
 
         float get(String k) {
             switch (k) {
@@ -200,6 +208,8 @@ public class CanvasView extends View {
                 case "minAlpha": return minAlpha; case "curve": return curve; case "alpha": return alpha;
                 case "sizeScale": return sizeScale;
                 case "tiltSize": return tiltSize; case "tiltOpacity": return tiltOpacity;
+                case "speedSize": return speedSize; case "speedOpacity": return speedOpacity;
+                case "motionFilter": return motionFilter; case "render": return render; case "blend": return blend;
             }
             return 0;
         }
@@ -214,6 +224,8 @@ public class CanvasView extends View {
                 case "minAlpha": minAlpha = v; break; case "curve": curve = v; break; case "alpha": alpha = v; break;
                 case "sizeScale": sizeScale = v; break;
                 case "tiltSize": tiltSize = v; break; case "tiltOpacity": tiltOpacity = v; break;
+                case "speedSize": speedSize = v; break; case "speedOpacity": speedOpacity = v; break;
+                case "motionFilter": motionFilter = v; break; case "render": render = v; break; case "blend": blend = v; break;
             }
         }
 
@@ -382,7 +394,7 @@ public class CanvasView extends View {
     private int guideColor(float mul) {
         return ((int) (255 * Math.min(1f, guideOpacity * mul)) << 24) | 0x3D9BFF;
     }
-    public boolean editGuide, assist;
+    public boolean editGuide;
     private int dragVp = -1;
     private float asX, asY, adX, adY;
     private boolean asDir;
@@ -450,14 +462,140 @@ public class CanvasView extends View {
 
     /** Changes canvas size. scale=true fits artwork to the new size; false keeps it 1:1, centred (crop/extend). */
     public void resizeDocument(int w, int h, boolean scale) {
-        commitMove();
-        int keep = current;
-        ArrayList<Layer> out = new ArrayList<>();
-        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
         float s = scale ? Math.min((float) w / docW, (float) h / docH) : 1f;
         Matrix m = new Matrix();
         m.setScale(s, s);
         m.postTranslate((w - docW * s) / 2f, (h - docH * s) / 2f);
+        remapDocument(w, h, m);
+    }
+
+    // ---------- Crop (like Procreate: drag the box, rotate, thirds grid) ----------
+    public boolean cropping;
+    public final RectF crop = new RectF();
+    public float cropRot, cropAspect; // aspect 0 = free, else width / height
+    public Runnable onCropChanged;
+    private int cropDrag = -1;
+    private float cropLX, cropLY;
+
+    public void startCrop() {
+        commitMove();
+        cropping = true;
+        crop.set(0, 0, docW, docH);
+        cropRot = 0; cropAspect = 0;
+        animateFit();
+        invalidate();
+    }
+
+    public void cancelCrop() { cropping = false; invalidate(); }
+
+    /** Applies the crop: the box becomes the new canvas (outside the old canvas = transparent). */
+    public void applyCrop() {
+        cropping = false;
+        int w = Math.max(1, Math.round(crop.width())), h = Math.max(1, Math.round(crop.height()));
+        Matrix m = new Matrix();
+        m.setRotate(-cropRot, crop.centerX(), crop.centerY());
+        m.postTranslate(-crop.left, -crop.top);
+        remapDocument(w, h, m);
+        animateFit();
+    }
+
+    /** Doc point -> the crop box's own (unrotated) frame. */
+    private float[] cropLocal(float x, float y) {
+        float[] q = {x, y};
+        Matrix m = new Matrix();
+        m.setRotate(-cropRot, crop.centerX(), crop.centerY());
+        m.mapPoints(q);
+        return q;
+    }
+
+    private float[] cropCorners() {
+        float[] q = {crop.left, crop.top, crop.right, crop.top, crop.right, crop.bottom, crop.left, crop.bottom};
+        Matrix m = new Matrix();
+        m.setRotate(cropRot, crop.centerX(), crop.centerY());
+        m.mapPoints(q);
+        return q;
+    }
+
+    private boolean cropTouch(MotionEvent e, int action) {
+        view.invert(inverse);
+        float[] f = {e.getX(), e.getY()};
+        inverse.mapPoints(f);
+        float[] l = cropLocal(f[0], f[1]);
+        if (action == MotionEvent.ACTION_DOWN) {
+            float tol = 28 * getResources().getDisplayMetrics().density / view.mapRadius(1f);
+            float[] hx = {crop.left, crop.right, crop.right, crop.left, crop.centerX(), crop.right, crop.centerX(), crop.left};
+            float[] hy = {crop.top, crop.top, crop.bottom, crop.bottom, crop.top, crop.centerY(), crop.bottom, crop.centerY()};
+            cropDrag = -1;
+            float best = tol;
+            for (int k = 0; k < 8; k++) {
+                float d = (float) Math.hypot(l[0] - hx[k], l[1] - hy[k]);
+                if (d < best) { best = d; cropDrag = k; }
+            }
+            if (cropDrag < 0 && crop.contains(l[0], l[1])) cropDrag = 8;
+            cropLX = l[0]; cropLY = l[1];
+            return true;
+        }
+        if (action == MotionEvent.ACTION_MOVE && cropDrag >= 0) {
+            float min = 8;
+            RectF r = new RectF(crop);
+            int k = cropDrag;
+            if (k == 8) r.offset(l[0] - cropLX, l[1] - cropLY);
+            else {
+                if (k == 0 || k == 3 || k == 7) r.left = Math.min(l[0], r.right - min);
+                if (k == 1 || k == 2 || k == 5) r.right = Math.max(l[0], r.left + min);
+                if (k == 0 || k == 1 || k == 4) r.top = Math.min(l[1], r.bottom - min);
+                if (k == 2 || k == 3 || k == 6) r.bottom = Math.max(l[1], r.top + min);
+                if (cropAspect > 0) { // keep the chosen shape
+                    if (k == 4 || k == 6) { float w = r.height() * cropAspect; r.left = r.centerX() - w / 2; r.right = r.left + w; }
+                    else { float h = r.width() / cropAspect; if (k == 0 || k == 1) r.top = r.bottom - h; else r.bottom = r.top + h; }
+                }
+            }
+            crop.set(r);
+            cropLX = l[0]; cropLY = l[1];
+            if (onCropChanged != null) onCropChanged.run();
+            invalidate();
+            return true;
+        }
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) cropDrag = -1;
+        return true;
+    }
+
+    private void drawCrop(Canvas c) {
+        if (!cropping) return;
+        float[] q = cropCorners();
+        view.mapPoints(q);
+        Path box = new Path();
+        box.moveTo(q[0], q[1]); box.lineTo(q[2], q[3]); box.lineTo(q[4], q[5]); box.lineTo(q[6], q[7]); box.close();
+        Path dim = new Path();
+        dim.addRect(0, 0, getWidth(), getHeight(), Path.Direction.CW);
+        dim.addPath(box);
+        dim.setFillType(Path.FillType.EVEN_ODD);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(0x99000000);
+        c.drawPath(dim, p);
+        p.setStyle(Paint.Style.STROKE);
+        p.setColor(0x88FFFFFF);
+        p.setStrokeWidth(1);
+        for (int k = 1; k <= 2; k++) { // rule-of-thirds grid
+            float t = k / 3f;
+            c.drawLine(q[0] + (q[2] - q[0]) * t, q[1] + (q[3] - q[1]) * t, q[6] + (q[4] - q[6]) * t, q[7] + (q[5] - q[7]) * t, p);
+            c.drawLine(q[0] + (q[6] - q[0]) * t, q[1] + (q[7] - q[1]) * t, q[2] + (q[4] - q[2]) * t, q[3] + (q[5] - q[3]) * t, p);
+        }
+        p.setColor(Color.WHITE);
+        p.setStrokeWidth(2.5f);
+        c.drawPath(box, p);
+        float r = 8 * getResources().getDisplayMetrics().density;
+        p.setStyle(Paint.Style.FILL);
+        for (int k = 0; k < 4; k++) c.drawCircle(q[k * 2], q[k * 2 + 1], r, p);
+        for (int k = 0; k < 4; k++) c.drawCircle((q[k * 2] + q[(k + 1) % 4 * 2]) / 2, (q[k * 2 + 1] + q[(k + 1) % 4 * 2 + 1]) / 2, r * 0.7f, p);
+    }
+
+    /** Rebuilds every layer at a new size through matrix m (resize, crop). Undo history is cleared. */
+    private void remapDocument(int w, int h, Matrix m) {
+        commitMove();
+        int keep = current;
+        ArrayList<Layer> out = new ArrayList<>();
+        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
         for (Layer l : layers) {
             Layer n = new Layer(Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888), l.name);
             n.copyProps(l);
@@ -996,6 +1134,8 @@ public class CanvasView extends View {
         drawCursor(c);
         drawSnapLines(c);
         drawLoupe(c);
+        drawSizePreview(c);
+        drawCrop(c);
         if (onFrame != null) onFrame.run();
         if (tool == MOVE && moving) { // transform box + handles (screen space)
             float[] q = handlePoints();
@@ -1371,6 +1511,45 @@ public class CanvasView extends View {
     }
 
     /** Sets the ink grey to the composited colour under a screen point. */
+    /** Brush size preview while the size slider moves (like Procreate): the real tip at its on-screen size. */
+    private float sizePrevX = -1, sizePrevY;
+    private boolean sizePrevRight;
+    /** x = the sidebar edge; the preview grows away from it (to the right, or to the left when right). */
+    public void showSizePreview(float x, float y, boolean right) { sizePrevX = x; sizePrevY = y; sizePrevRight = right; invalidate(); }
+    public void hideSizePreview() { sizePrevX = -1; invalidate(); }
+
+    private void drawSizePreview(Canvas c) {
+        if (sizePrevX < 0) return;
+        float d = Math.min(getHeight() * 0.9f, size * brush.sizeScale * view.mapRadius(1f));
+        float r = Math.max(1.5f, d / 2);
+        float cx = sizePrevRight ? sizePrevX - r - 6 : sizePrevX + r + 6, cy = Math.max(r, Math.min(getHeight() - r, sizePrevY));
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        p.setColor(Color.WHITE);
+        c.drawCircle(cx, cy, r + 6, p); // paper behind the tip so any grey shows
+        int ink = 0xFF000000 | grey * 0x10101;
+        if (brush.tip != null) {
+            Bitmap t = Bitmap.createBitmap(brush.tw[0], brush.th[0], Bitmap.Config.ALPHA_8);
+            t.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(brush.tip[0]));
+            p.setColor(ink);
+            float s = d / Math.max(brush.tw[0], brush.th[0]);
+            c.drawBitmap(t.extractAlpha(), null, new RectF(cx - brush.tw[0] * s / 2, cy - brush.th[0] * s / 2, cx + brush.tw[0] * s / 2, cy + brush.th[0] * s / 2), p);
+            t.recycle();
+        } else {
+            float hard = Math.min(0.99f, brush.hard);
+            p.setShader(new android.graphics.RadialGradient(cx, cy, r, new int[]{ink, ink, ink & 0x00FFFFFF},
+                    new float[]{0, hard, 1}, android.graphics.Shader.TileMode.CLAMP));
+            c.save();
+            c.scale(1, Math.max(0.05f, brush.roundness), cx, cy);
+            c.drawCircle(cx, cy, r, p);
+            c.restore();
+            p.setShader(null);
+        }
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeWidth(2);
+        p.setColor(0xFF3D9BFF);
+        c.drawCircle(cx, cy, r + 6, p);
+    }
+
     private float pickSX, pickSY;
     private int pickOld; // grey before this eyedropper touch (bottom half of the ring)
 
@@ -1436,6 +1615,10 @@ public class CanvasView extends View {
         if (showCursor) { // outline follows the pen while drawing
             curSX = e.getX(); curSY = e.getY();
             cursorOn = action != MotionEvent.ACTION_UP && action != MotionEvent.ACTION_CANCEL || isPen;
+        }
+        if (cropping) {
+            if (e.getPointerCount() >= 2 || gesture) { cropDrag = -1; return handleGesture(e, action, view); }
+            return cropTouch(e, action);
         }
         if (shapeEdit && action == MotionEvent.ACTION_DOWN && e.getPointerCount() == 1 && shapeHandleTouch(e, action)) return true;
         if (shapeEdit && shapeDrag >= 0) return shapeHandleTouch(e, action);
@@ -1525,6 +1708,7 @@ public class CanvasView extends View {
                 smoothReset(pt[0], pt[1]);
                 record(pt[0], pt[1], e.getPressure());
                 tiltFrom(e, -1);
+                speedFrom(e.getX(), e.getY(), e.getEventTime(), true);
                 startAt(pt[0], pt[1], e.getPressure());
                 flush();
                 if (!isPen && holdAction != 2) postDelayed(pickHold, holdDelay);
@@ -1543,10 +1727,12 @@ public class CanvasView extends View {
                 for (int i = 0; i < e.getHistorySize(); i++) {
                     map(e.getHistoricalX(i), e.getHistoricalY(i));
                     tiltFrom(e, i);
+                    speedFrom(e.getHistoricalX(i), e.getHistoricalY(i), e.getHistoricalEventTime(i), false);
                     feed(e.getHistoricalPressure(i));
                 }
                 map(e.getX(), e.getY());
                 tiltFrom(e, -1);
+                speedFrom(e.getX(), e.getY(), e.getEventTime(), false);
                 feed(e.getPressure());
                 flush();
                 if (Math.hypot(e.getX() - holdSX, e.getY() - holdSY) > 6) {
@@ -1581,7 +1767,7 @@ public class CanvasView extends View {
 
     /** Drawing assist: lock the stroke to the nearest guide direction (grid, isometric or perspective). */
     private void assistPt() {
-        if (!stroking || !assist || !(guide == 1 || guide >= 6) || shaping) return;
+        if (!stroking || !tgt().assist || !(guide == 1 || guide >= 6) || shaping) return;
         float x = pt[0], y = pt[1];
         if (!asDir) {
             float dx = x - asX, dy = y - asY;
@@ -1759,7 +1945,9 @@ public class CanvasView extends View {
     /** Guide settings as text (saved with each drawing). */
     public String guideState() {
         StringBuilder sb = new StringBuilder();
-        sb.append(guide).append(',').append(gridSize).append(',').append(assist).append(',')
+        StringBuilder as = new StringBuilder("L"); // Drawing Assist per layer, bottom to top
+        for (Layer l : layers) as.append(l.assist ? '1' : '0');
+        sb.append(guide).append(',').append(gridSize).append(',').append(as).append(',')
           .append(guideOpacity).append(',').append(guideThick).append(',').append(vpRays);
         for (float v : vp) sb.append(',').append(v);
         sb.append(',').append(horizonLevel);
@@ -1769,7 +1957,9 @@ public class CanvasView extends View {
     public void setGuideState(String s) {
         try {
             String[] v = s.trim().split(",");
-            guide = Integer.parseInt(v[0]); gridSize = Integer.parseInt(v[1]); assist = Boolean.parseBoolean(v[2]);
+            guide = Integer.parseInt(v[0]); gridSize = Integer.parseInt(v[1]);
+            if (v[2].startsWith("L")) for (int i = 0; i < layers.size() && i + 1 < v[2].length(); i++) layers.get(i).assist = v[2].charAt(i + 1) == '1';
+            else { boolean on = Boolean.parseBoolean(v[2]); for (Layer l : layers) l.assist = on; } // older drawings: all layers
             guideOpacity = Float.parseFloat(v[3]); guideThick = Float.parseFloat(v[4]); vpRays = Integer.parseInt(v[5]);
             for (int i = 0; i < 6; i++) vp[i] = Float.parseFloat(v[6 + i]);
             horizonLevel = v.length <= 12 || Boolean.parseBoolean(v[12]);
@@ -1804,14 +1994,27 @@ public class CanvasView extends View {
     private int recN;
 
     private void smoothReset(float x, float y) {
-        smoX = x; smoY = y; stabN = 0; stabI = 0; arc = 0; recN = 0;
+        smoX = x; smoY = y; stabN = 0; stabI = 0; arc = 0; recN = 0; mfX = mfRX = x; mfY = mfRY = y; mfVX = mfVY = 0;
         strokeSeed = System.nanoTime();
         rnd = new java.util.Random(strokeSeed);
     }
 
     /** Returns the smoothed position for a new input point (in pt[]). */
+    private float mfX, mfY, mfVX, mfVY, mfRX, mfRY;
+
     private void smooth(float x, float y) {
         Brush b = brush;
+        if (b.motionFilter > 0) {
+            // Per direction: back-and-forth shake averages out to ~0 movement and is smoothed away,
+            // while steady movement in a direction passes straight through (no lag). Like a "one euro" filter.
+            float mf = b.motionFilter;
+            mfVX += ((x - mfRX) - mfVX) * 0.35f; mfVY += ((y - mfRY) - mfVY) * 0.35f;
+            mfRX = x; mfRY = y;
+            float kx = 1 - mf * 0.92f * (1 - Math.min(1f, Math.abs(mfVX) / (1.5f + mf * 6)));
+            float ky = 1 - mf * 0.92f * (1 - Math.min(1f, Math.abs(mfVY) / (1.5f + mf * 6)));
+            mfX += (x - mfX) * kx; mfY += (y - mfY) * ky;
+            x = mfX; y = mfY;
+        }
         int n = Math.round(b.stabilize * 16);
         if (n > 1) { // stabilization: average of the last n points
             stabX[stabI] = x; stabY[stabI] = y;
@@ -1922,6 +2125,17 @@ public class CanvasView extends View {
         }
     }
 
+    /** Pen speed for the dab being drawn: 0 = slow, 1 = fast (about 4 screen pixels per millisecond). */
+    private float speedNow, spX, spY;
+    private long spT;
+    private void speedFrom(float sx, float sy, long t, boolean start) {
+        if (start) { speedNow = 0; spX = sx; spY = sy; spT = t; return; }
+        long dt = Math.max(1, t - spT);
+        float v = (float) Math.hypot(sx - spX, sy - spY) / dt / (getResources().getDisplayMetrics().density * 1.6f);
+        speedNow += (Math.min(1f, v) - speedNow) * 0.3f;
+        spX = sx; spY = sy; spT = t;
+    }
+
     /** Stylus tilt for the dab being drawn: 0 = upright, 1 = lying flat. */
     private float tiltNow;
     private void tiltFrom(MotionEvent e, int h) {
@@ -1934,6 +2148,7 @@ public class CanvasView extends View {
         Brush b = brush;
         float r = diameter(p) / 2f * taper();
         if (b.tiltSize > 0) r *= 1 + b.tiltSize * tiltNow * 2.5f;
+        if (b.speedSize > 0) r *= 1 - b.speedSize * speedNow * 0.75f;
         if (b.jitterSize > 0) r *= 1 - b.jitterSize * rnd.nextFloat();
         if (b.scatter > 0) { // random offset around the stroke
             double ang = rnd.nextDouble() * Math.PI * 2, dist = rnd.nextDouble() * b.scatter * r * 4;
@@ -1942,7 +2157,7 @@ public class CanvasView extends View {
         r = Math.max(0.5f, r);
         float pr = pres(p);
         float alphaJ = b.jitterOpacity > 0 ? 1 - b.jitterOpacity * rnd.nextFloat() : 1f;
-        int a = (int) (255 * opacity * b.alpha * alphaJ * (b.minAlpha + (1 - b.minAlpha) * pr) * (1 - b.tiltOpacity * tiltNow * 0.85f));
+        int a = (int) (255 * opacity * b.alpha * alphaJ * (b.minAlpha + (1 - b.minAlpha) * pr) * (1 - b.tiltOpacity * tiltNow * 0.85f) * (1 - b.speedOpacity * speedNow * 0.8f));
         if (a <= 0) return;
         float soft = Math.max(1f, r * (1 - b.hard));
         int x0 = Math.max(0, (int) (cx - r - 1)), x1 = Math.min(docW - 1, (int) (cx + r + 1));
@@ -1957,6 +2172,7 @@ public class CanvasView extends View {
         float gsc = 1f / Math.max(0.1f, b.grainScale);
         // Dab shape: roundness squashes, angle (optionally following the stroke) rotates
         boolean shaped = b.roundness < 0.999f || b.angle != 0 || b.follow;
+        boolean heavy = b.render >= 0.5f && !erasing;
         double ang = Math.toRadians(b.angle + (b.follow ? strokeAng : 0));
         float ca = (float) Math.cos(ang), sa = (float) Math.sin(ang), inv = 1f / Math.max(0.05f, b.roundness);
         // Tip image: pick the mip level closest to the stamp size
@@ -1993,6 +2209,7 @@ public class CanvasView extends View {
                 }
                 int v = (int) (a * c);
                 if (smudging) dab[(y - y0) * bw + (x - x0)] = v;
+                else if (heavy) { int m0 = mask[row + x] & 255; mask[row + x] = (byte) (m0 + v * (255 - m0) / 255); }
                 else if (v > (mask[row + x] & 255)) mask[row + x] = (byte) v;
             }
         }
@@ -2021,7 +2238,7 @@ public class CanvasView extends View {
         int[] cl = adjPaint ? adjBlock(r) : cloning ? cloneBlock(r) : null;
         boolean lock = tgt().alphaLock;
         byte[] sm = sel;
-        int ink = grey;
+        int ink0 = grey, bm = Math.round(brush.blend);
         for (int y = 0; y < h; y++) {
             int mrow = (r.top + y) * docW + r.left, brow = y * w;
             for (int x = 0; x < w; x++) {
@@ -2030,6 +2247,7 @@ public class CanvasView extends View {
                 if (m == 0) continue;
                 int px = buf[brow + x];
                 int A = px >>> 24, G = px & 255;
+                int ink = bm == 0 || A == 0 ? ink0 : (paintBlend(bm, ink0, G) * A + ink0 * (255 - A)) / 255;
                 int nA, nG;
                 if (erasing) { if (lock) continue; nA = A * (255 - m) / 255; nG = G; }
                 else if (cl != null) {
@@ -2056,6 +2274,18 @@ public class CanvasView extends View {
         r.setEmpty();
         tgt().dirty = true;
         invalidate();
+    }
+
+    /** The brush's blend mode: what the ink becomes over grey g (Brush Studio → Rendering). */
+    private static int paintBlend(int mode, int ink, int g) {
+        switch (mode) {
+            case 1: return ink * g / 255;                                      // multiply
+            case 2: return Math.min(ink, g);                                   // darken
+            case 3: return Math.max(ink, g);                                   // lighten
+            case 4: return 255 - (255 - ink) * (255 - g) / 255;                // screen
+            case 5: return g < 128 ? 2 * ink * g / 255 : 255 - 2 * (255 - ink) * (255 - g) / 255; // overlay
+            default: return ink;
+        }
     }
 
     /** Bilinear sample of a greyscale image, 0 outside. */
@@ -3355,6 +3585,13 @@ public class CanvasView extends View {
         apply(new Op(() -> l.blend = old, () -> l.blend = mode, 64));
     }
 
+    public void toggleAssist(int i) {
+        named("Drawing Assist");
+        Layer l = layers.get(i);
+        boolean v = l.assist;
+        apply(new Op(() -> l.assist = v, () -> l.assist = !v, 64));
+    }
+
     public void toggleAlphaLock(int i) {
         named("Alpha lock");
         Layer l = layers.get(i);
@@ -3411,15 +3648,27 @@ public class CanvasView extends View {
         tp.setColor(Color.rgb(t.grey, t.grey, t.grey));
         tp.setTextSize(t.size);
         tp.setTypeface(typeface(getContext(), t.font, t.bold));
+        tp.setLetterSpacing(t.spacing);
+        tp.setUnderlineText(t.underline);
+        if (t.outline) { tp.setStyle(Paint.Style.STROKE); tp.setStrokeWidth(Math.max(1, t.size * 0.02f)); }
         android.text.Layout.Alignment al = t.align == 0 ? android.text.Layout.Alignment.ALIGN_NORMAL
                 : t.align == 2 ? android.text.Layout.Alignment.ALIGN_OPPOSITE : android.text.Layout.Alignment.ALIGN_CENTER;
         int width = Math.max(1, (int) (docW * 0.9f));
-        android.text.StaticLayout sl = android.text.StaticLayout.Builder.obtain(t.text, 0, t.text.length(), tp, width).setAlignment(al).build();
+        android.text.StaticLayout sl = android.text.StaticLayout.Builder.obtain(t.text, 0, t.text.length(), tp, width).setAlignment(al)
+                .setLineSpacing(0, Math.max(0.5f, t.lineSpacing)).build();
         l.bmp.eraseColor(0);
         Canvas c = new Canvas(l.bmp);
         c.translate(cx - width / 2f, cy - sl.getHeight() / 2f);
         sl.draw(c);
         l.dirty = true;
+    }
+
+    /** Turns a text layer into ordinary pixels (no longer editable as text). */
+    public void rasterizeText(Layer l) {
+        if (l.text == null) return;
+        named("Rasterize text");
+        TextInfo t = l.text;
+        apply(new Op(() -> l.text = t, () -> l.text = null, 64));
     }
 
     /** Re-renders an editable text layer where its text currently is (after moving it). */

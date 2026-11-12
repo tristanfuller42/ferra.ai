@@ -38,7 +38,7 @@ import java.io.OutputStream;
 
 public class MainActivity extends Activity {
     private static final long MAX_PIXELS = 3000L * 3000L;
-    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_BRUSH = 3, REQ_REF = 4, REQ_TL = 5, REQ_GIF = 6, REQ_AMP4 = 7, REQ_GALLERY = 8, REQ_CAMERA = 9, REQ_EXPORT = 10, REQ_BRUSH_EXPORT = 11, REQ_FONT = 12, REQ_TREE = 13, REQ_PDF_MANY = 14, REQ_PAGES_PDF = 15;
+    private static final int REQ_OPEN = 1, REQ_IMPORT = 2, REQ_BRUSH = 3, REQ_REF = 4, REQ_TL = 5, REQ_GIF = 6, REQ_AMP4 = 7, REQ_GALLERY = 8, REQ_CAMERA = 9, REQ_EXPORT = 10, REQ_BRUSH_EXPORT = 11, REQ_FONT = 12, REQ_TREE = 13, REQ_PDF_MANY = 14, REQ_PAGES_PDF = 15, REQ_APNG = 16, REQ_LAYERS_TREE = 17, REQ_BACKUP = 18, REQ_RESTORE = 19;
     private static final String[] FORMATS = {"PNG", "JPEG", "WebP", "PDF", "PSD (layers)"};
     private static final String[] MIMES = {"image/png", "image/jpeg", "image/webp", "application/pdf", "image/vnd.adobe.photoshop"};
     private static final String[] EXTS = {"png", "jpg", "webp", "pdf", "psd"};
@@ -171,7 +171,17 @@ public class MainActivity extends Activity {
         });
         side.addView(grip, new LinearLayout.LayoutParams(-1, (int) (22 * dp)));
         sizeS = new Ui.VSlider(this, (float) Math.sqrt((canvas.size - 1) / 149f));
-        sizeS.listener = (v, done) -> { canvas.size = 1 + 149 * v * v; hud("Size " + Math.round(v * 100) + "%"); }; // finer control at small sizes
+        sizeS.listener = (v, done) -> { // finer control at small sizes
+            canvas.size = 1 + 149 * v * v;
+            hud("Size " + Math.round(v * 100) + "%");
+            if (done) { canvas.hideSizePreview(); return; }
+            int[] sl = new int[2], cl = new int[2];
+            sizeS.getLocationOnScreen(sl); canvas.getLocationOnScreen(cl);
+            boolean leftSide = sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL);
+            float y = sl[1] - cl[1] + sizeS.getHeight() * (1 - v);
+            float x = leftSide ? sl[0] - cl[0] + sizeS.getWidth() + 24 * dp : sl[0] - cl[0] - 24 * dp;
+            canvas.showSizePreview(x, y, !leftSide);
+        };
         side.addView(sizeS, new LinearLayout.LayoutParams((int) (40 * dp), (int) (150 * dp)));
         pickBtn = icon(side, Ui.PICK, (int) (40 * dp), v -> {
             if (prefs.getInt("squareAction", 0) == 1) { // Prefs: the sidebar button opens the QuickMenu
@@ -528,6 +538,51 @@ public class MainActivity extends Activity {
         try { return Integer.parseInt(e.getText().toString().trim()); } catch (Exception x) { return 0; }
     }
 
+    /** Crop & resize like Procreate: drag the box on the canvas; rotate; exact numbers under Settings. */
+    private void startCrop() {
+        setTool(CanvasView.DRAW);
+        closePanels();
+        canvas.startCrop();
+        canvas.onCropChanged = this::showCropBar;
+        showCropBar();
+    }
+
+    private void showCropBar() {
+        if (!canvas.cropping) return;
+        LinearLayout a = barRow(), b = barRow();
+        TextView info = new TextView(this);
+        info.setText(String.format("  %d × %d px  ", Math.round(canvas.crop.width()), Math.round(canvas.crop.height())));
+        info.setTextColor(Color.WHITE);
+        a.addView(info);
+        String[] asp = {"Free", "Original", "Square", "4:3", "16:9"};
+        float[] av = {0, (float) canvas.docW / canvas.docH, 1, 4 / 3f, 16 / 9f};
+        for (int i = 0; i < asp.length; i++) {
+            int k = i;
+            chip(a, asp[i], Math.abs(canvas.cropAspect - av[i]) < 1e-3f, v -> {
+                canvas.cropAspect = av[k];
+                if (av[k] > 0) { // reshape around the centre, keeping the area roughly the same
+                    float cx = canvas.crop.centerX(), cy = canvas.crop.centerY();
+                    float area = canvas.crop.width() * canvas.crop.height();
+                    float h = (float) Math.sqrt(area / av[k]), w = h * av[k];
+                    canvas.crop.set(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2);
+                }
+                canvas.invalidate();
+                showCropBar();
+            });
+        }
+        b.addView(slider("Rotate °", Math.round(canvas.cropRot), -45, 45, v -> { canvas.cropRot = v; canvas.invalidate(); }));
+        chip(b, "Reset", false, v -> { canvas.crop.set(0, 0, canvas.docW, canvas.docH); canvas.cropRot = 0; canvas.cropAspect = 0; canvas.invalidate(); showCropBar(); });
+        chip(b, "Settings…", false, v -> { canvas.cancelCrop(); bottom.setVisibility(View.GONE); canvasDialog(); });
+        chip(b, "Cancel", false, v -> { canvas.cancelCrop(); bottom.setVisibility(View.GONE); });
+        chip(b, "Done", true, v -> {
+            int w = Math.round(canvas.crop.width()), h = Math.round(canvas.crop.height());
+            if (!valid(w, h)) return;
+            if ((long) layerCap(w, h) < canvas.layers.size()) { toast("Too many layers for that size"); return; }
+            confirm("Crop to " + w + " × " + h + "? Undo history is cleared.", () -> { canvas.applyCrop(); bottom.setVisibility(View.GONE); });
+        });
+        showBar(a, b);
+    }
+
     private boolean valid(int w, int h) {
         if (w < 16 || h < 16) { toast("Minimum is 16 × 16"); return false; }
         if ((long) w * h > MAX_PIXELS) { toast("Too big: max about 9 megapixels"); return false; }
@@ -542,7 +597,7 @@ public class MainActivity extends Activity {
     private void newDocument(int w, int h) {
         canvas.docW = w; canvas.docH = h;
         canvas.setDocument(w, h, java.util.Collections.singletonList(canvas.newLayer("Layer 1")));
-        canvas.guide = 0; canvas.assist = false; canvas.editGuide = false; // each new drawing starts without a guide
+        canvas.guide = 0; canvas.editGuide = false; // each new drawing starts without a guide
         canvas.guideOpacity = 0.35f; canvas.guideThick = 1.5f; canvas.vpRays = 36; canvas.gridSize = 100; canvas.horizonLevel = true;
         if (bottom != null && canvas.tool != CanvasView.SELECT && canvas.tool != CanvasView.MOVE) bottom.setVisibility(View.GONE);
     }
@@ -568,6 +623,7 @@ public class MainActivity extends Activity {
     }
 
     private void setTool(int t) {
+        if (canvas.cropping) canvas.cancelCrop(); // picking a tool leaves Crop without changing anything
         if (canvas.tool == CanvasView.SELECT && t != CanvasView.SELECT) canvas.closePolygon();
         if (canvas.adjusting()) finishAdjust(true);      // like Procreate: picking another tool applies
         if (canvas.liquifying()) { canvas.endLiquify(true); }
@@ -988,7 +1044,9 @@ public class MainActivity extends Activity {
         if (l.group != 0) mm.add(0, 27, 17, "Remove from group");
         mm.add(0, 28, 18, "Lock").setCheckable(true).setChecked(l.locked);
         mm.add(0, 29, 19, "Reference").setCheckable(true).setChecked(l.reference);
+        mm.add(0, 31, 21, "Drawing Assist").setCheckable(true).setChecked(l.assist);
         if (l.text != null) mm.add(0, 30, 20, "Edit text");
+        if (l.text != null) mm.add(0, 32, 22, "Rasterize text");
         m.setOnMenuItemClickListener(it -> {
             int id = it.getItemId();
             if (id >= 100) { canvas.setBlend(idx, id - 100); return true; }
@@ -1019,6 +1077,8 @@ public class MainActivity extends Activity {
                 case 26: canvas.newGroup(); break;
                 case 27: canvas.ungroup(); break;
                 case 28: canvas.toggleLock(idx); break;
+                case 32: canvas.rasterizeText(canvas.layers.get(idx)); refreshPanel(); break;
+                case 31: canvas.toggleAssist(idx); hud(canvas.layers.get(idx).assist ? "Drawing Assist on for this layer" : "Drawing Assist off"); break;
                 case 29: canvas.toggleReference(idx); hud(canvas.layers.get(idx).reference ? "Reference: fills use this layer's lines" : "Reference off"); break;
                 case 30: textDialog(l); break;
             }
@@ -1090,13 +1150,42 @@ public class MainActivity extends Activity {
         android.widget.CheckBox bold = new android.widget.CheckBox(this);
         bold.setText("Bold");
         bold.setChecked(cur != null && cur.bold);
-        box.addView(bold);
+        LinearLayout styles = barRow();
+        styles.addView(bold);
+        android.widget.CheckBox under = new android.widget.CheckBox(this), outl = new android.widget.CheckBox(this);
+        under.setText("Underline"); under.setChecked(cur != null && cur.underline);
+        outl.setText("Outline"); outl.setChecked(cur != null && cur.outline);
+        styles.addView(under); styles.addView(outl);
+        box.addView(styles);
+        TextView spl = new TextView(this);
+        box.addView(spl);
+        SeekBar sp = new SeekBar(this); // letter spacing −0.10 … +0.50 em
+        sp.setMax(60);
+        sp.setProgress(Math.round(((cur != null ? cur.spacing : 0) + 0.1f) * 100));
+        box.addView(sp);
+        TextView lsl = new TextView(this);
+        box.addView(lsl);
+        SeekBar ls = new SeekBar(this); // line spacing 0.6 … 2.5 ×
+        ls.setMax(190);
+        ls.setProgress(Math.round(((cur != null ? cur.lineSpacing : 1f) - 0.6f) * 100));
+        box.addView(ls);
+        Runnable lbl = () -> {
+            spl.setText(String.format("Letter spacing  %.2f", sp.getProgress() / 100f - 0.1f));
+            lsl.setText(String.format("Line spacing  %.2f×", 0.6f + ls.getProgress() / 100f));
+        };
+        lbl.run();
+        sp.setOnSeekBarChangeListener(new Slider() { public void onProgressChanged(SeekBar s2, int p2, boolean u) { lbl.run(); } });
+        ls.setOnSeekBarChangeListener(new Slider() { public void onProgressChanged(SeekBar s2, int p2, boolean u) { lbl.run(); } });
         textDlg = new AlertDialog.Builder(this).setTitle(editing != null ? "Edit text" : "Add text").setView(box)
                 .setPositiveButton(editing != null ? "Update" : "Add", (d, w) -> {
                     String t = et.getText().toString();
                     if (t.trim().isEmpty()) return;
                     CanvasView.TextInfo ti = new CanvasView.TextInfo(t, Math.max(8, sb.getProgress()), bold.isChecked(), align[0], fontIds.get(font[0]),
                             cur != null ? cur.grey : canvas.grey);
+                    ti.spacing = sp.getProgress() / 100f - 0.1f;
+                    ti.lineSpacing = 0.6f + ls.getProgress() / 100f;
+                    ti.underline = under.isChecked();
+                    ti.outline = outl.isChecked();
                     if (editing != null) { canvas.editText(editing, ti); return; }
                     if (!canvas.addTextLayer(ti)) { full(); return; }
                     setTool(CanvasView.MOVE);
@@ -1346,10 +1435,10 @@ public class MainActivity extends Activity {
         LinearLayout end = barRow();
         if (tab != 0 && tab != 4) {
             android.widget.Switch sw = new android.widget.Switch(this);
-            sw.setText("Assisted drawing  ");
+            sw.setText("Assisted drawing (this layer)  ");
             sw.setTextColor(Color.WHITE);
-            sw.setChecked(canvas.assist);
-            sw.setOnCheckedChangeListener((b, on) -> canvas.assist = on);
+            sw.setChecked(canvas.cur().assist);
+            sw.setOnCheckedChangeListener((b, on) -> { if (canvas.cur().assist != on) canvas.toggleAssist(canvas.current); refreshPanel(); });
             end.addView(sw);
         }
         if (tab == 3) chip(end, "Reset points", false, v -> {
@@ -1423,7 +1512,7 @@ public class MainActivity extends Activity {
                 pop.item("Paste", canvas.hasClipboard(), () -> { if (!canvas.paste()) full(); });
                 break;
             case 1: // Canvas
-                pop.item("Crop & resize", true, () -> action(4, anchor));
+                pop.item("Crop & resize", true, this::startCrop);
                 pop.toggle("Animation Assist", canvas.anim, v -> { pop.win.dismiss(); action(12, anchor); });
                 pop.toggle("Page Assist", canvas.pages, v -> { pop.win.dismiss(); togglePages(); });
                 pop.toggle("Drawing guide", canvas.guide != 0, v -> { pop.win.dismiss(); if (v) guideMenu(anchor); else { canvas.guide = 0; canvas.invalidate(); } });
@@ -1438,7 +1527,10 @@ public class MainActivity extends Activity {
                 pop.section("Share image");
                 for (int i = FORMATS.length - 1; i >= 0; i--) { int f = i; pop.item(FORMATS[i].replace(" (layers)", ""), true, () -> startExport(f)); }
                 pop.section("Share layers");
+                pop.item("PNG files (each layer)", true, () -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_LAYERS_TREE));
                 pop.item("Animated GIF", true, () -> exportAnimRequest(true));
+                pop.item("Animated PNG", true, () -> startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                        .setType("image/png").putExtra(Intent.EXTRA_TITLE, nameOf(curId) + ".png"), REQ_APNG));
                 pop.item("Animated MP4", true, () -> exportAnimRequest(false));
                 break;
             case 3: // Video
@@ -1822,14 +1914,18 @@ public class MainActivity extends Activity {
     private static final Object[][][] STUDIO = {
         {{"Stroke path"}, {"spacing", "Spacing", 0.02f, 1f, "%"}, {"jitterSize", "Size jitter", 0f, 1f, "%"},
                 {"jitterOpacity", "Opacity jitter", 0f, 1f, "%"}, {"scatter", "Scatter", 0f, 1f, "%"}},
-        {{"Stabilization"}, {"streamline", "StreamLine (smoothing)", 0f, 1f, "%"}, {"stabilize", "Stabilization", 0f, 1f, "%"}},
+        {{"Stabilization"}, {"streamline", "StreamLine (smoothing)", 0f, 1f, "%"}, {"stabilize", "Stabilization", 0f, 1f, "%"},
+                {"motionFilter", "Motion filtering (removes shake, no lag)", 0f, 1f, "%"}},
         {{"Taper"}, {"taperStart", "Start taper", 0f, 1f, "%"}, {"taperEnd", "End taper", 0f, 1f, "%"}},
         {{"Shape"}, {"roundness", "Roundness", 0.05f, 1f, "%"}, {"angle", "Angle", 0f, 180f, "°"},
                 {"follow", "Rotate with stroke", 0f, 1f, "toggle"}, {"hard", "Hardness", 0f, 1f, "%"}},
         {{"Grain"}, {"grain", "Grain depth", 0f, 1f, "%"}, {"grainScale", "Grain scale", 0.25f, 4f, "×"}},
         {{"Dynamics"}, {"minSize", "Pressure → size", 0f, 1f, "inv%"}, {"minAlpha", "Pressure → opacity", 0f, 1f, "inv%"},
                 {"curve", "Pressure curve (soft … firm)", 0.3f, 3f, "×"},
-                {"tiltSize", "Tilt → size (pen on its side)", 0f, 1f, "%"}, {"tiltOpacity", "Tilt → lighter", 0f, 1f, "%"}},
+                {"tiltSize", "Tilt → size (pen on its side)", 0f, 1f, "%"}, {"tiltOpacity", "Tilt → lighter", 0f, 1f, "%"},
+                {"speedSize", "Speed → thinner (fast strokes)", 0f, 1f, "%"}, {"speedOpacity", "Speed → lighter (fast strokes)", 0f, 1f, "%"}},
+        {{"Rendering"}, {"render", "Rendering mode", 0f, 1f, "choice:Light glaze|Heavy glaze"},
+                {"blend", "Blend mode", 0f, 5f, "choice:Normal|Multiply|Darken|Lighten|Screen|Overlay"}},
         {{"Properties"}, {"sizeScale", "Maximum size", 0.1f, 3f, "×"}, {"alpha", "Maximum opacity", 0.05f, 1f, "%"}},
         {{"About this brush"}},
     };
@@ -1894,6 +1990,29 @@ public class MainActivity extends Activity {
             for (int i = 1; i < sec.length; i++) {
                 String key = (String) sec[i][0], label = (String) sec[i][1], fmt = (String) sec[i][4];
                 float mn = (Float) sec[i][2], mx = (Float) sec[i][3];
+                if (fmt.startsWith("choice:")) { // a row of chips, one per option
+                    String[] opts = fmt.substring(7).split("\\|");
+                    TextView cl = new TextView(this);
+                    cl.setText(label);
+                    cl.setTextColor(0xFFE8E8E8);
+                    cl.setTextSize(14);
+                    cl.setPadding(0, (int) (10 * dp), 0, (int) (4 * dp));
+                    settings.addView(cl);
+                    LinearLayout cr = barRow();
+                    TextView[] cs = new TextView[opts.length];
+                    for (int k = 0; k < opts.length; k++) {
+                        int kk = k;
+                        cs[k] = chip(cr, opts[k], Math.round(b.get(key)) == k, v -> {
+                            b.put(key, kk);
+                            for (int j = 0; j < cs.length; j++) cs[j].setBackgroundColor(j == kk ? Ui.ACCENT : 0);
+                            redraw.run();
+                        });
+                    }
+                    HorizontalScrollView hs = new HorizontalScrollView(this);
+                    hs.addView(cr);
+                    settings.addView(hs);
+                    continue;
+                }
                 if (fmt.equals("toggle")) {
                     android.widget.Switch sw = new android.widget.Switch(this);
                     sw.setText(label);
@@ -2299,7 +2418,7 @@ public class MainActivity extends Activity {
                 r.addView(mv, mlp);
             }
             TextView name = new TextView(this);
-            name.setText((l.clip ? "↳ " : "") + l.name + (l.alphaLock ? "  α" : "") + (l.locked ? "  🔒" : "") + (l.reference ? "  REF" : "") + (l.text != null ? "  T" : ""));
+            name.setText((l.clip ? "↳ " : "") + l.name + (l.alphaLock ? "  α" : "") + (l.locked ? "  🔒" : "") + (l.reference ? "  REF" : "") + (l.text != null ? "  T" : "") + (l.assist ? "  · Assisted" : ""));
             name.setTextColor(Color.WHITE);
             name.setSingleLine(true);
             name.setPadding((int) (8 * dp), 0, 0, 0);
@@ -2854,12 +2973,14 @@ public class MainActivity extends Activity {
         chip(ctl, "Export", false, v -> {
             Ui.PopMenu m = new Ui.PopMenu(this, v);
             m.getMenu().add(0, REQ_GIF, 0, "Animated GIF");
-            m.getMenu().add(0, REQ_AMP4, 1, "MP4 video");
+            m.getMenu().add(0, REQ_APNG, 1, "Animated PNG");
+            m.getMenu().add(0, REQ_AMP4, 2, "MP4 video");
             m.setOnMenuItemClickListener(it -> {
-                boolean gif = it.getItemId() == REQ_GIF;
+                int id = it.getItemId();
+                String type = id == REQ_GIF ? "image/gif" : id == REQ_APNG ? "image/png" : "video/mp4";
+                String ext = id == REQ_GIF ? ".gif" : id == REQ_APNG ? ".png" : ".mp4";
                 startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
-                        .setType(gif ? "image/gif" : "video/mp4")
-                        .putExtra(Intent.EXTRA_TITLE, nameOf(curId) + (gif ? ".gif" : ".mp4")), it.getItemId());
+                        .setType(type).putExtra(Intent.EXTRA_TITLE, nameOf(curId) + ext), id);
                 return true;
             });
             m.show();
@@ -2977,7 +3098,166 @@ public class MainActivity extends Activity {
                 }).show();
     }
 
-    private void exportAnimation(Uri uri, boolean gif) {
+    // ---- Backup / restore: the whole gallery, brushes, fonts and settings in one zip ----
+
+    private static final String[] BACKUP_DIRS = {"gallery", "brushes", "fonts"};
+
+    void backup(Uri uri) {
+        toast("Backing up…");
+        new Thread(() -> {
+            String msg;
+            int files = 0;
+            synchronized (MainActivity.class) {
+                try (OutputStream os = getContentResolver().openOutputStream(uri, "wt");
+                     java.util.zip.ZipOutputStream z = new java.util.zip.ZipOutputStream(new java.io.BufferedOutputStream(os, 65536))) {
+                    for (String dir : BACKUP_DIRS) {
+                        File[] fs = new File(getFilesDir(), dir).listFiles();
+                        if (fs == null) continue;
+                        java.util.Arrays.sort(fs, (x, y) -> Boolean.compare(!x.getName().endsWith(".psd"), !y.getName().endsWith(".psd"))); // drawings first
+                        for (File f : fs) {
+                            if (!f.isFile() || f.getName().endsWith(".tmp")) continue; // time-lapse folders are left out (large)
+                            z.putNextEntry(new java.util.zip.ZipEntry(dir + "/" + f.getName()));
+                            java.nio.file.Files.copy(f.toPath(), z);
+                            z.closeEntry();
+                            files++;
+                        }
+                    }
+                    StringBuilder sb = new StringBuilder();
+                    for (java.util.Map.Entry<String, ?> e : prefs.getAll().entrySet()) {
+                        Object v = e.getValue();
+                        String t = v instanceof Boolean ? "b" : v instanceof Integer ? "i" : v instanceof Long ? "l" : v instanceof Float ? "f" : "s";
+                        sb.append(t).append('\t').append(e.getKey()).append('\t').append(esc(String.valueOf(v))).append('\n');
+                    }
+                    z.putNextEntry(new java.util.zip.ZipEntry("prefs.txt"));
+                    z.write(sb.toString().getBytes("UTF-8"));
+                    z.closeEntry();
+                    msg = "Backup saved (" + files + " files)";
+                } catch (Throwable t) { msg = "Backup failed: " + t.getMessage(); }
+            }
+            String m = msg;
+            runOnUiThread(() -> toast(m));
+        }).start();
+    }
+
+    /** Adds drawings, brushes and fonts from a backup that aren't here yet; never overwrites. */
+    void restore(Uri uri) {
+        toast("Restoring…");
+        new Thread(() -> {
+            int added = 0;
+            String err = null;
+            java.util.List<File> newBrushes = new java.util.ArrayList<>();
+            java.util.Set<String> skipIds = new java.util.HashSet<>();
+            String stacksIn = null, orderIn = null;
+            java.util.Map<String, String[]> prefIn = new java.util.HashMap<>();
+            synchronized (MainActivity.class) {
+                try (InputStream is = getContentResolver().openInputStream(uri);
+                     java.util.zip.ZipInputStream z = new java.util.zip.ZipInputStream(new java.io.BufferedInputStream(is, 65536))) {
+                    java.util.zip.ZipEntry e;
+                    boolean any = false;
+                    while ((e = z.getNextEntry()) != null) {
+                        String n = e.getName();
+                        if (n.equals("prefs.txt")) {
+                            for (String line : new String(Brushes.readAll(z), "UTF-8").split("\n")) {
+                                String[] f = line.split("\t", 3);
+                                if (f.length == 3) prefIn.put(f[1], new String[]{f[0], unesc(f[2])});
+                            }
+                            any = true;
+                            continue;
+                        }
+                        int slash = n.indexOf('/');
+                        if (slash < 0 || n.contains("..")) continue;
+                        String dir = n.substring(0, slash), name = n.substring(slash + 1);
+                        if (!java.util.Arrays.asList(BACKUP_DIRS).contains(dir) || name.isEmpty() || name.contains("/")) continue;
+                        any = true;
+                        if (dir.equals("gallery") && name.equals("stacks.txt")) { stacksIn = new String(Brushes.readAll(z), "UTF-8"); continue; }
+                        if (dir.equals("gallery") && name.equals("order.txt")) { orderIn = new String(Brushes.readAll(z), "UTF-8"); continue; }
+                        File d = new File(getFilesDir(), dir);
+                        d.mkdirs();
+                        File out = new File(d, name);
+                        String id = dir.equals("gallery") ? name.replaceAll("[._].*$", "") : null;
+                        if (id != null && name.endsWith(".psd") && out.exists()) skipIds.add(id); // same drawing already here
+                        if (out.exists() || (id != null && skipIds.contains(id))) continue;
+                        java.nio.file.Files.copy(z, out.toPath());
+                        if (dir.equals("brushes")) newBrushes.add(out);
+                        if (name.endsWith(".psd")) added++;
+                    }
+                    if (!any) err = "That isn't an Inkwell backup";
+                    // merge stacks and gallery order
+                    if (stacksIn != null) {
+                        java.util.Map<String, String> m = stacks();
+                        for (String line : stacksIn.split("\n")) {
+                            int k = line.indexOf('=');
+                            if (k > 0 && !m.containsKey(line.substring(0, k))) m.put(line.substring(0, k), line.substring(k + 1));
+                        }
+                        saveStacks(m);
+                    }
+                    if (orderIn != null) {
+                        java.util.List<String> o = manualIds();
+                        for (String id : orderIn.split("\n")) if (!id.isEmpty() && !o.contains(id)) o.add(id);
+                        writeText(orderFile(), String.join("\n", o));
+                    }
+                } catch (Throwable t) { err = t.getMessage(); }
+            }
+            int a = added; String er = err;
+            runOnUiThread(() -> {
+                android.content.SharedPreferences.Editor ed = prefs.edit();
+                for (java.util.Map.Entry<String, String[]> pe : prefIn.entrySet()) { // settings you don't have yet
+                    String k = pe.getKey(), t = pe.getValue()[0], v = pe.getValue()[1];
+                    if (prefs.contains(k) || k.equals("cur")) continue;
+                    try {
+                        switch (t) {
+                            case "b": ed.putBoolean(k, Boolean.parseBoolean(v)); break;
+                            case "i": ed.putInt(k, Integer.parseInt(v)); break;
+                            case "l": ed.putLong(k, Long.parseLong(v)); break;
+                            case "f": ed.putFloat(k, Float.parseFloat(v)); break;
+                            default: ed.putString(k, v);
+                        }
+                    } catch (Exception ignored) { }
+                }
+                ed.apply();
+                for (File f : newBrushes) {
+                    try {
+                        CanvasView.Brush b = Brushes.load(f);
+                        CanvasView.Brush same = null;
+                        if (b.builtin) for (CanvasView.Brush x : CanvasView.BRUSHES) if (x.builtin && x.name.equals(b.name)) same = x;
+                        if (same != null) { same.setValues(b.values()); same.set = b.set; same.file = f; }
+                        else CanvasView.BRUSHES.add(b);
+                    } catch (Exception ignored) { }
+                }
+                fillGallery();
+                toast(er != null ? "Restore failed: " + er : "Restored " + a + " drawings");
+            });
+        }).start();
+    }
+
+    /** Share → PNG files: every layer as its own PNG (transparent, full size) in a chosen folder. */
+    private void exportLayers(Uri tree) {
+        java.util.List<CanvasView.Layer> ls = new java.util.ArrayList<>(canvas.layers);
+        java.util.List<Bitmap> copies = new java.util.ArrayList<>();
+        for (CanvasView.Layer l : ls) copies.add(l.bmp.copy(Bitmap.Config.ARGB_8888, false));
+        String base = nameOf(curId).replaceAll("[/\\\\:*?\"<>|]", "_");
+        toast("Saving layers…");
+        new Thread(() -> {
+            int done = 0; String err = null;
+            try {
+                Uri parent = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, android.provider.DocumentsContract.getTreeDocumentId(tree));
+                for (int i = 0; i < ls.size(); i++) {
+                    String nm = String.format("%s %02d %s.png", base, i + 1, ls.get(i).name.replaceAll("[/\\\\:*?\"<>|]", "_"));
+                    Uri out = android.provider.DocumentsContract.createDocument(getContentResolver(), parent, "image/png", nm);
+                    if (out == null) continue;
+                    try (OutputStream o = getContentResolver().openOutputStream(out, "wt")) { copies.get(i).compress(Bitmap.CompressFormat.PNG, 100, o); }
+                    done++;
+                }
+            } catch (Throwable t) { err = t.getMessage(); }
+            for (Bitmap b : copies) b.recycle();
+            int d = done; String e = err;
+            runOnUiThread(() -> toast(e == null ? "Saved " + d + " layers" : "Stopped after " + d + ": " + e));
+        }).start();
+    }
+
+    /** kind: 0 GIF, 1 MP4, 2 animated PNG. */
+    private void exportAnimation(Uri uri, int kind) {
+        boolean gif = kind != 1;
         int f0 = canvas.firstFrame(), n = canvas.layers.size() - f0;
         if (n <= 0) return;
         int w, h;
@@ -2998,7 +3278,8 @@ public class MainActivity extends Activity {
                 public Bitmap get(int i) { return fr[seq.get(i % seq.size()) - f0].copy(Bitmap.Config.ARGB_8888, false); }
             };
             try {
-                if (gif) try (OutputStream o = getContentResolver().openOutputStream(uri, "wt")) { Video.gif(o, w, h, fps, frames); }
+                if (kind == 2) try (OutputStream o = getContentResolver().openOutputStream(uri, "wt")) { Video.apng(o, w, h, fps, frames); }
+                else if (gif) try (OutputStream o = getContentResolver().openOutputStream(uri, "wt")) { Video.gif(o, w, h, fps, frames); }
                 else try (ParcelFileDescriptor fd = getContentResolver().openFileDescriptor(uri, "rw")) { Video.mp4(fd.getFileDescriptor(), w, h, fps, frames); }
             } catch (Throwable t) { msg = "Export failed: " + t.getMessage(); }
             for (Bitmap b : fr) b.recycle();
@@ -3270,7 +3551,11 @@ public class MainActivity extends Activity {
         else if (req == REQ_BRUSH) importBrushes(data.getData());
         else if (req == REQ_GALLERY) load(data.getData(), false);
         else if (req == REQ_TL) exportTimelapse(data.getData());
-        else if (req == REQ_GIF || req == REQ_AMP4) exportAnimation(data.getData(), req == REQ_GIF);
+        else if (req == REQ_GIF || req == REQ_AMP4) exportAnimation(data.getData(), req == REQ_GIF ? 0 : 1);
+        else if (req == REQ_APNG) exportAnimation(data.getData(), 2);
+        else if (req == REQ_BACKUP) backup(data.getData());
+        else if (req == REQ_RESTORE) restore(data.getData());
+        else if (req == REQ_LAYERS_TREE) exportLayers(data.getData());
         else if (req == REQ_REF) loadReferenceImage(data.getData());
     }
 
@@ -3312,7 +3597,8 @@ public class MainActivity extends Activity {
         for (int i = 0; i < canvas.layers.size(); i++) {
             CanvasView.TextInfo t = canvas.layers.get(i).text;
             if (t != null) sb.append(i).append('|').append(esc(t.text)).append('|').append(t.size).append('|').append(t.bold)
-                    .append('|').append(t.align).append('|').append(t.font).append('|').append(t.grey).append('\n');
+                    .append('|').append(t.align).append('|').append(t.font).append('|').append(t.grey)
+                    .append('|').append(t.spacing).append('|').append(t.lineSpacing).append('|').append(t.underline).append('|').append(t.outline).append('\n');
         }
         writeText(textFile(curId), sb.toString());
         StringBuilder a = new StringBuilder();
@@ -3330,9 +3616,15 @@ public class MainActivity extends Activity {
                 String[] f = line.split("\\|", -1);
                 if (f.length < 7) continue;
                 int i = Integer.parseInt(f[0]);
-                if (i < canvas.layers.size())
-                    canvas.layers.get(i).text = new CanvasView.TextInfo(unesc(f[1]), Float.parseFloat(f[2]), Boolean.parseBoolean(f[3]),
+                if (i < canvas.layers.size()) {
+                    CanvasView.TextInfo ti = new CanvasView.TextInfo(unesc(f[1]), Float.parseFloat(f[2]), Boolean.parseBoolean(f[3]),
                             Integer.parseInt(f[4]), f[5], Integer.parseInt(f[6]));
+                    if (f.length >= 11) {
+                        ti.spacing = Float.parseFloat(f[7]); ti.lineSpacing = Float.parseFloat(f[8]);
+                        ti.underline = Boolean.parseBoolean(f[9]); ti.outline = Boolean.parseBoolean(f[10]);
+                    }
+                    canvas.layers.get(i).text = ti;
+                }
             }
         } catch (Exception ignored) { }
         try {
@@ -3369,7 +3661,7 @@ public class MainActivity extends Activity {
             canvas.bgVisible = Boolean.parseBoolean(v[1]);
         } catch (Exception ignored) { }
         loadExtras();
-        canvas.guide = 0; canvas.assist = false; canvas.editGuide = false;
+        canvas.guide = 0; canvas.editGuide = false;
         try { canvas.setGuideState(new String(java.nio.file.Files.readAllBytes(guideFile(curId).toPath()), "UTF-8")); }
         catch (Exception ignored) { }
         canvas.invalidate();
@@ -3441,6 +3733,21 @@ public class MainActivity extends Activity {
             t.setTextColor(Color.WHITE);
             t.setTextSize(22);
             head.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+            button(head, "Backup", v -> {
+                Ui.Pop bp = new Ui.Pop(this, 300);
+                bp.item("Back up everything…", true, () -> saveCurrent(() -> startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                        .addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip")
+                        .putExtra(Intent.EXTRA_TITLE, "Inkwell backup " + new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(new java.util.Date()) + ".zip"), REQ_BACKUP)));
+                bp.item("Restore from a backup…", true, () -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                        .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQ_RESTORE));
+                TextView note = new TextView(this);
+                note.setText("Drawings, stacks, brushes, fonts and settings in one file. Keep it in Drive or on a computer: "
+                        + "uninstalling Inkwell deletes its drawings. Restore adds what's missing and keeps what you have.");
+                note.setTextColor(0xFF8E8E93);
+                note.setPadding((int) (16 * dp), (int) (6 * dp), (int) (16 * dp), (int) (8 * dp));
+                bp.add(note);
+                bp.show(v);
+            });
             button(head, "Import", v -> openDoc(REQ_GALLERY));
             button(head, "＋ New", this::newMenu);
             col.addView(head, new LinearLayout.LayoutParams(-1, (int) (52 * dp)));
@@ -3684,22 +3991,43 @@ public class MainActivity extends Activity {
     }
 
     /** Full-screen look at a drawing (pinch a gallery card, like Procreate). Tap to close. */
+    /** Full-screen preview (pinch out on a drawing). Swipe left/right for the next drawing, tap to close. */
     private void showPreview(String id) {
-        File f = previewFile(id).exists() ? previewFile(id) : thumbFile(id);
-        Bitmap b = android.graphics.BitmapFactory.decodeFile(f.getPath());
-        if (b == null) return;
+        java.util.Map<String, String> st = stacks();
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        for (String x : orderedIds()) if (java.util.Objects.equals(st.get(x), openStack)) ids.add(x);
+        if (!ids.contains(id)) ids.add(0, id);
+        int[] at = {ids.indexOf(id)};
         FrameLayout ov = new FrameLayout(this);
         ov.setBackgroundColor(0xF0000000);
         ImageView iv = new ImageView(this);
-        iv.setImageBitmap(b);
         iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
         ov.addView(iv, new FrameLayout.LayoutParams(-1, -1));
         TextView t = new TextView(this);
-        t.setText(nameOf(id) + "   ·   tap to close");
         t.setTextColor(Color.WHITE);
         t.setPadding((int) (16 * dp), (int) (16 * dp), 0, 0);
         ov.addView(t);
-        ov.setOnClickListener(v -> shell.removeView(ov));
+        Runnable show = () -> {
+            String cur = ids.get(at[0]);
+            File f = previewFile(cur).exists() ? previewFile(cur) : thumbFile(cur);
+            iv.setImageBitmap(android.graphics.BitmapFactory.decodeFile(f.getPath()));
+            t.setText(nameOf(cur) + "   ·   " + (at[0] + 1) + " / " + ids.size() + "   ·   swipe for more, tap to close");
+        };
+        show.run();
+        float[] down = new float[1];
+        ov.setOnTouchListener((v, e) -> {
+            if (e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) down[0] = e.getX();
+            else if (e.getActionMasked() == android.view.MotionEvent.ACTION_MOVE) iv.setTranslationX(e.getX() - down[0]);
+            else if (e.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+                float dx = e.getX() - down[0];
+                iv.setTranslationX(0);
+                if (Math.abs(dx) < 24 * dp) { shell.removeView(ov); return true; } // tap
+                if (dx < -80 * dp && at[0] < ids.size() - 1) at[0]++;
+                else if (dx > 80 * dp && at[0] > 0) at[0]--;
+                show.run();
+            } else iv.setTranslationX(0);
+            return true;
+        });
         shell.addView(ov);
     }
 
