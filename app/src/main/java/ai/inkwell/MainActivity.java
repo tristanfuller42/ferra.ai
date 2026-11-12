@@ -312,6 +312,7 @@ public class MainActivity extends Activity {
             Psd.Doc fd = d;
             runOnUiThread(() -> {
                 if (fd != null) { canvas.setDocument(fd.w, fd.h, fd.layers); canvas.setGroups(fd.groups); }
+                if (curId != null) loadBackground();
                 if (curId == null) { curId = newId(); prefs.edit().putString("cur", curId).apply(); }
                 loadSelections();
                 loaded = true;
@@ -1598,6 +1599,75 @@ public class MainActivity extends Activity {
             r.setOnClickListener(v -> { if (idx == canvas.current) layerOptions(v, idx); else canvas.select(idx); });
             layerList.addView(r);
         }
+        backgroundRow();
+    }
+
+    /** The "Background colour" row at the bottom of the Layers panel, like Procreate. */
+    private void backgroundRow() {
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setPadding(0, (int) (6 * dp), 0, (int) (6 * dp));
+        View sw = new View(this);
+        android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
+        d.setColor(Color.rgb(canvas.bgGrey, canvas.bgGrey, canvas.bgGrey));
+        d.setStroke((int) (2 * dp), 0xFF636366);
+        sw.setBackground(d);
+        sw.setAlpha(canvas.bgVisible ? 1f : 0.35f);
+        r.addView(sw, new LinearLayout.LayoutParams((int) (44 * dp), (int) (32 * dp)));
+        TextView n = new TextView(this);
+        n.setText("Background colour");
+        n.setTextColor(Color.WHITE);
+        n.setPadding((int) (8 * dp), 0, 0, 0);
+        r.addView(n, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView vis = new TextView(this);
+        vis.setText(canvas.bgVisible ? "●" : "○");
+        vis.setTextSize(16);
+        vis.setTextColor(canvas.bgVisible ? Color.WHITE : 0xFF888888);
+        vis.setPadding((int) (8 * dp), (int) (8 * dp), (int) (8 * dp), (int) (8 * dp));
+        vis.setOnClickListener(v -> canvas.setBackground(canvas.bgGrey, !canvas.bgVisible));
+        r.addView(vis);
+        r.setOnClickListener(this::pickBackground);
+        layerList.addView(r);
+    }
+
+    /** Grey picker for the background colour. */
+    private void pickBackground(View anchor) {
+        int before = canvas.bgGrey;
+        Ui.Pop pop = new Ui.Pop(this, 300);
+        pop.title("Background colour");
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int p = (int) (14 * dp);
+        box.setPadding(p, 0, p, p);
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(255);
+        sb.setProgress(canvas.bgGrey);
+        sb.setOnSeekBarChangeListener(new Slider() {
+            public void onProgressChanged(SeekBar s2, int v, boolean u) { canvas.bgGrey = v; canvas.bgVisible = true; canvas.invalidate(); }
+        });
+        box.addView(sb, new LinearLayout.LayoutParams(-1, (int) (44 * dp)));
+        LinearLayout sw = new LinearLayout(this);
+        for (int g : new int[]{0, 32, 64, 96, 128, 160, 192, 224, 255}) {
+            View v = new View(this);
+            android.graphics.drawable.GradientDrawable dr = new android.graphics.drawable.GradientDrawable();
+            dr.setColor(Color.rgb(g, g, g));
+            dr.setCornerRadius(6 * dp);
+            dr.setStroke(1, 0xFF636366);
+            v.setBackground(dr);
+            v.setOnClickListener(x -> sb.setProgress(g));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (26 * dp), (int) (26 * dp));
+            lp.setMargins(2, 2, (int) (4 * dp), 2);
+            sw.addView(v, lp);
+        }
+        box.addView(sw);
+        pop.add(box);
+        pop.win.setOnDismissListener(() -> { // one undo step for the whole change
+            int after = canvas.bgGrey;
+            canvas.bgGrey = before;
+            canvas.setBackground(after, true);
+            refreshPanel();
+        });
+        pop.show(anchor);
     }
 
     private void groupHeader(int g) {
@@ -2136,6 +2206,15 @@ public class MainActivity extends Activity {
 
     private void export(Uri uri, int fmt) {
         Bitmap flat = canvas.flatten();
+        if (!canvas.bgVisible && (fmt == 1 || fmt == 3 || fmt == 4)) { // JPEG/PDF can't be transparent; PSD composite
+            Bitmap w2 = Bitmap.createBitmap(flat.getWidth(), flat.getHeight(), Bitmap.Config.ARGB_8888);
+            Canvas c2 = new Canvas(w2);
+            c2.drawColor(Color.WHITE);
+            c2.drawBitmap(flat, 0, 0, null);
+            flat.recycle();
+            flat = w2;
+        }
+        Bitmap flatF = flat;
         java.util.List<CanvasView.Layer> layers = new java.util.ArrayList<>(canvas.layers);
         java.util.Map<Integer, CanvasView.Group> groups = new java.util.HashMap<>(canvas.groups);
         int w = canvas.docW, h = canvas.docH;
@@ -2144,9 +2223,9 @@ public class MainActivity extends Activity {
             String msg = "Saved";
             try (OutputStream o = getContentResolver().openOutputStream(uri, "wt")) {
                 switch (fmt) {
-                    case 0: flat.compress(Bitmap.CompressFormat.PNG, 100, o); break;
-                    case 1: flat.compress(Bitmap.CompressFormat.JPEG, 95, o); break;
-                    case 2: flat.compress(Bitmap.CompressFormat.WEBP_LOSSLESS, 100, o); break;
+                    case 0: flatF.compress(Bitmap.CompressFormat.PNG, 100, o); break;
+                    case 1: flatF.compress(Bitmap.CompressFormat.JPEG, 95, o); break;
+                    case 2: flatF.compress(Bitmap.CompressFormat.WEBP_LOSSLESS, 100, o); break;
                     case 3: {
                         PdfDocument pdf = new PdfDocument();
                         // page size as if printed at 300 dpi (points are 1/72 inch); the image keeps full resolution
@@ -2154,16 +2233,16 @@ public class MainActivity extends Activity {
                         PdfDocument.Page pg = pdf.startPage(new PdfDocument.PageInfo.Builder(
                                 Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)), 1).create());
                         pg.getCanvas().scale(k, k);
-                        pg.getCanvas().drawBitmap(flat, 0, 0, new Paint(Paint.FILTER_BITMAP_FLAG));
+                        pg.getCanvas().drawBitmap(flatF, 0, 0, new Paint(Paint.FILTER_BITMAP_FLAG));
                         pdf.finishPage(pg);
                         pdf.writeTo(o);
                         pdf.close();
                         break;
                     }
-                    default: Psd.write(o, w, h, layers, groups, flat);
+                    default: Psd.write(o, w, h, layers, groups, flatF);
                 }
             } catch (Throwable t) { msg = "Save failed: " + t.getMessage(); }
-            flat.recycle();
+            flatF.recycle();
             String fm = msg;
             runOnUiThread(() -> toast(fm));
         }).start();
@@ -2205,6 +2284,23 @@ public class MainActivity extends Activity {
     private File nameFile(String id) { return new File(gdir, id + ".name"); }
     private File selFile(String id) { return new File(gdir, id + ".sel"); }
     private File tlDir(String id) { return new File(gdir, id + "_tl"); }
+    private File bgFile(String id) { return new File(gdir, id + ".bg"); }
+
+    private void saveBackground() {
+        try (FileOutputStream o = new FileOutputStream(bgFile(curId))) { o.write((canvas.bgGrey + "," + canvas.bgVisible).getBytes("UTF-8")); }
+        catch (Exception ignored) { }
+    }
+
+    /** Restores the drawing's background colour (white if none saved). */
+    private void loadBackground() {
+        canvas.bgGrey = 255; canvas.bgVisible = true;
+        try {
+            String[] v = new String(java.nio.file.Files.readAllBytes(bgFile(curId).toPath()), "UTF-8").trim().split(",");
+            canvas.bgGrey = Integer.parseInt(v[0]);
+            canvas.bgVisible = Boolean.parseBoolean(v[1]);
+        } catch (Exception ignored) { }
+        canvas.invalidate();
+    }
     private String newId() { return Long.toString(System.currentTimeMillis(), 36); }
 
     private String nameOf(String id) {
@@ -2219,6 +2315,7 @@ public class MainActivity extends Activity {
     /** Saves the open drawing (layers as PSD + thumbnail) on a background thread, then runs done on the UI thread. */
     private void saveCurrent(Runnable done) {
         if (adjActiveFinish()) { /* applied */ }
+        if (curId != null) saveBackground();
         canvas.commitMove();
         Bitmap flat = canvas.flatten();
         Bitmap thumb = canvas.renderSmall(420);
@@ -2346,6 +2443,7 @@ public class MainActivity extends Activity {
                 prefs.edit().putString("cur", id).apply();
                 canvas.setDocument(fd.w, fd.h, fd.layers);
                 canvas.setGroups(fd.groups);
+                loadBackground();
                 loadSelections();
                 gallery.setVisibility(View.GONE);
                 if (canvas.anim) refreshTimeline();
@@ -2402,6 +2500,7 @@ public class MainActivity extends Activity {
                     try {
                         java.nio.file.Files.copy(docFile(id).toPath(), docFile(nid).toPath());
                         if (thumbFile(id).exists()) java.nio.file.Files.copy(thumbFile(id).toPath(), thumbFile(nid).toPath());
+                        if (bgFile(id).exists()) java.nio.file.Files.copy(bgFile(id).toPath(), bgFile(nid).toPath());
                         setName(nid, nameOf(id) + " copy");
                     } catch (Exception e) { toast("Could not duplicate"); }
                     fillGallery();
@@ -2409,7 +2508,7 @@ public class MainActivity extends Activity {
                 }
                 case 3:
                     confirm("Delete \"" + nameOf(id) + "\"? This can't be undone.", () -> {
-                        for (File f : new File[]{docFile(id), thumbFile(id), nameFile(id), selFile(id)}) f.delete();
+                        for (File f : new File[]{docFile(id), thumbFile(id), nameFile(id), selFile(id), bgFile(id)}) f.delete();
                         File[] tl = tlDir(id).listFiles();
                         if (tl != null) for (File f : tl) f.delete();
                         tlDir(id).delete();

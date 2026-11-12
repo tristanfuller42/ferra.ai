@@ -22,6 +22,8 @@ Layout matches Procreate so you can switch between the two easily:
   chromatic aberration, gradient map) are left out on purpose: Inkwell is greyscale.
 - **Smudge**: uses the current brush shape.
 - **ColorDrop**: drag the colour circle onto the canvas to fill an area.
+- **Background colour**: bottom row of the Layers panel, like Procreate. Tap to pick its grey, tap the dot to hide it
+  (transparent PNG/WebP/PSD; JPEG/PDF get white). You never paint on it: every drawing starts with a blank Layer 1.
 - **Layers**: tap the selected layer for options: rename, select, copy, fill, clear, alpha lock, clipping mask,
   invert, merge down, blend mode (12 modes), delete. Tap the letter on a layer to change its blend mode.
 - **Text**: Actions → Add text.

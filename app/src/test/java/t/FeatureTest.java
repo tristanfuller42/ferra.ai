@@ -517,4 +517,46 @@ public class FeatureTest extends Base {
         try { java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui$Pop").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
         catch (Exception e) { throw new RuntimeException(e); }
     }
+
+    @Test public void background_colour_like_procreate() throws Exception {
+        call(act, "newGalleryItem", 1000, 1200);
+        settle();
+        assertEquals("new drawing has one layer", 1, cv.layers.size());
+        assertEquals("it is blank", 0, inkSum(L()));
+        line(W * .3f, H * .5f, W * .7f, H * .5f);
+        assertTrue("drawing goes on the layer", inkSum(L()) > 0);
+        Bitmap f = cv.flatten();
+        assertEquals("background untouched", 0xFFFFFFFF, f.getPixel(5, 5));
+        cv.setBackground(80, true);
+        f = cv.flatten();
+        assertEquals("background colour changed", 80, f.getPixel(5, 5) & 255);
+        assertEquals("layer pixels unchanged by background", 255, f.getPixel(5, 5) >>> 24);
+        cv.undo();
+        assertEquals("background change undoes", 255, cv.flatten().getPixel(5, 5) & 255);
+        cv.redo();
+        call(act, "togglePanel");
+        settle();
+        shot("62_background_row");
+        cv.setBackground(80, false);
+        settle();
+        shot("63_background_hidden");
+        assertEquals("hidden background is transparent", 0, cv.flatten().getPixel(5, 5) >>> 24);
+        java.io.File png = new java.io.File(System.getProperty("java.io.tmpdir"), "bg.png"), jpg = new java.io.File(System.getProperty("java.io.tmpdir"), "bg.jpg");
+        call(act, "export", android.net.Uri.fromFile(png), 0);
+        call(act, "export", android.net.Uri.fromFile(jpg), 1);
+        settle();
+        Bitmap pb = android.graphics.BitmapFactory.decodeFile(png.getPath()), jb = android.graphics.BitmapFactory.decodeFile(jpg.getPath());
+        assertEquals("PNG keeps transparency", 0, pb.getPixel(5, 5) >>> 24);
+        assertTrue("JPEG gets white", (jb.getPixel(5, 5) & 255) > 245);
+        // kept per drawing
+        cv.setBackground(40, true);
+        String id = (String) get(act, "curId");
+        call(act, "showGallery"); settle();
+        call(act, "newGalleryItem", 800, 800); settle();
+        assertEquals("other drawing starts white", 255, cv.bgGrey);
+        call(act, "showGallery"); settle();
+        call(act, "openGalleryItem", id); settle();
+        assertEquals("background restored", 40, cv.bgGrey);
+        assertTrue(cv.bgVisible);
+    }
 }

@@ -101,6 +101,41 @@ public class CanvasView extends View {
     private final Paint copy = new Paint();
     private final Paint paper = new Paint();
 
+    /** Background colour (like Procreate's "Background colour" layer): never painted on directly. */
+    public int bgGrey = 255;
+    public boolean bgVisible = true;
+
+    /** Colour used where a solid picture is needed (video, thumbnails, reference). */
+    public int paperColor() { return bgVisible ? Color.rgb(bgGrey, bgGrey, bgGrey) : Color.WHITE; }
+
+    public void setBackground(int grey, boolean visible) {
+        int og = bgGrey; boolean ov = bgVisible;
+        if (og == grey && ov == visible) return;
+        apply(new Op(() -> { bgGrey = og; bgVisible = ov; }, () -> { bgGrey = grey; bgVisible = visible; }, 64));
+    }
+
+    private android.graphics.BitmapShader checker;
+
+    /** Grey checkerboard shown where the background is hidden (transparent). */
+    private Paint checkerPaint(float viewScale) {
+        if (checker == null) {
+            Bitmap t = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888);
+            Canvas tc = new Canvas(t);
+            tc.drawColor(0xFFFFFFFF);
+            Paint q = new Paint();
+            q.setColor(0xFFD1D1D6);
+            tc.drawRect(0, 0, 8, 8, q);
+            tc.drawRect(8, 8, 16, 16, q);
+            checker = new android.graphics.BitmapShader(t, android.graphics.Shader.TileMode.REPEAT, android.graphics.Shader.TileMode.REPEAT);
+        }
+        Matrix m = new Matrix();
+        m.setScale(1 / viewScale, 1 / viewScale);
+        checker.setLocalMatrix(m);
+        Paint p = new Paint();
+        p.setShader(checker);
+        return p;
+    }
+
     /** Brush preset. minSize/minAlpha = size/opacity at zero pressure (1 = pressure doesn't affect it). */
     public static final class Brush {
         public String name;
@@ -303,6 +338,7 @@ public class CanvasView extends View {
 
     public void setDocument(int w, int h, List<Layer> ls) {
         docW = w; docH = h;
+        bgGrey = 255; bgVisible = true;
         groups.clear();
         nextGroup = 1;
         layers.clear();
@@ -346,8 +382,10 @@ public class CanvasView extends View {
             out.add(n);
         }
         java.util.HashMap<Integer, Group> keepGroups = new java.util.HashMap<>(groups);
-        int keepNext = nextGroup;
+        int keepNext = nextGroup, keepBg = bgGrey;
+        boolean keepBgOn = bgVisible;
         setDocument(w, h, out);
+        bgGrey = keepBg; bgVisible = keepBgOn;
         groups.putAll(keepGroups);
         nextGroup = keepNext;
         current = Math.min(keep, layers.size() - 1);
@@ -620,7 +658,7 @@ public class CanvasView extends View {
     public Bitmap renderFrame(int idx, int w, int h) {
         Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(b);
-        c.drawColor(Color.WHITE);
+        c.drawColor(paperColor());
         c.scale((float) w / docW, (float) h / docH);
         Paint p = new Paint(Paint.FILTER_BITMAP_FLAG);
         if (firstFrame() == 1) drawLayer(c, 0, p, false);
@@ -637,7 +675,7 @@ public class CanvasView extends View {
         int w = Math.max(2, Math.round(docW * s) & ~1), h = Math.max(2, Math.round(docH * s) & ~1);
         Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(b);
-        c.drawColor(Color.WHITE);
+        c.drawColor(paperColor());
         c.scale((float) w / docW, (float) h / docH);
         render(c, false);
         return b;
@@ -645,7 +683,7 @@ public class CanvasView extends View {
 
     /** Draws the live picture into another canvas (reference window). */
     public void drawInto(Canvas c) {
-        c.drawColor(Color.WHITE);
+        c.drawColor(paperColor());
         render(c, true);
     }
 
@@ -686,7 +724,8 @@ public class CanvasView extends View {
         c.save();
         c.concat(view);
         c.clipRect(0, 0, docW, docH);
-        c.drawRect(0, 0, docW, docH, paper);
+        if (bgVisible) { paper.setColor(paperColor()); c.drawRect(0, 0, docW, docH, paper); }
+        else c.drawRect(0, 0, docW, docH, checkerPaint(sc));
         render(c, true);
         Paint g = new Paint(Paint.ANTI_ALIAS_FLAG);
         g.setStyle(Paint.Style.STROKE);
@@ -872,7 +911,7 @@ public class CanvasView extends View {
         map(sx, sy);
         int x = (int) pt[0], y = (int) pt[1];
         if (x < 0 || y < 0 || x >= docW || y >= docH) return;
-        float g = 255;
+        float g = paperColor() & 255;
         for (Layer l : layers) {
             if (!l.visible) continue;
             int px = l.bmp.getPixel(x, y);
@@ -2479,12 +2518,12 @@ public class CanvasView extends View {
         return addLayer(l);
     }
 
-    /** All visible layers flattened onto white paper. */
+    /** All visible layers flattened onto the background colour (transparent if the background is hidden). */
     public Bitmap flatten() {
         commitMove();
         Bitmap out = Bitmap.createBitmap(docW, docH, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(out);
-        c.drawColor(Color.WHITE);
+        if (bgVisible) c.drawColor(paperColor());
         render(c, false);
         return out;
     }
