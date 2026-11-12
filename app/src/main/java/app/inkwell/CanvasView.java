@@ -190,13 +190,15 @@ public class CanvasView extends View {
         float motionFilter;                   // removes hand shake without StreamLine's lag
         float render;                         // 0 light glaze (overlaps in one stroke don't build up), 1 heavy glaze (they do)
         float blend;                          // paint blend: 0 normal, 1 multiply, 2 darken, 3 lighten, 4 screen, 5 overlay
+        float pattern;                        // 1 = halftone: reveals one dot grid fixed to the canvas (passes never double up)
+        float patternScale = 12, patternDot = 0.35f; // grid spacing (canvas px) and dot radius (fraction of spacing)
         public boolean builtin;
 
         /** All adjustable settings as named values (used by Brush Studio, saving, reset). */
         static final String[] KEYS = {"spacing", "streamline", "stabilize", "taperStart", "taperEnd", "jitterSize",
                 "jitterOpacity", "scatter", "hard", "roundness", "angle", "follow", "grain", "grainScale",
                 "minSize", "minAlpha", "curve", "alpha", "sizeScale", "tiltSize", "tiltOpacity",
-                "speedSize", "speedOpacity", "motionFilter", "render", "blend"};
+                "speedSize", "speedOpacity", "motionFilter", "render", "blend", "pattern", "patternScale", "patternDot"};
 
         float get(String k) {
             switch (k) {
@@ -210,6 +212,7 @@ public class CanvasView extends View {
                 case "tiltSize": return tiltSize; case "tiltOpacity": return tiltOpacity;
                 case "speedSize": return speedSize; case "speedOpacity": return speedOpacity;
                 case "motionFilter": return motionFilter; case "render": return render; case "blend": return blend;
+                case "pattern": return pattern; case "patternScale": return patternScale; case "patternDot": return patternDot;
             }
             return 0;
         }
@@ -226,6 +229,7 @@ public class CanvasView extends View {
                 case "tiltSize": tiltSize = v; break; case "tiltOpacity": tiltOpacity = v; break;
                 case "speedSize": speedSize = v; break; case "speedOpacity": speedOpacity = v; break;
                 case "motionFilter": motionFilter = v; break; case "render": render = v; break; case "blend": blend = v; break;
+                case "pattern": pattern = v; break; case "patternScale": patternScale = v; break; case "patternDot": patternDot = v; break;
             }
         }
 
@@ -433,7 +437,8 @@ public class CanvasView extends View {
         new Brush("Felt tip",       0.9f,  0.9f,  0.8f, 0.85f, 0f,   0.06f).with("Drawing", 0.25f, 0f, 0f),
         // Textures
         new Brush("Stipple",        1f,    1f,    1f,   0.9f, 0f,    0.6f).with("Textures", 0f, 0f, 0f).tipKind(8).p("scatter", 0.3f),
-        new Brush("Halftone",       1f,    1f,    1f,   0.9f, 0f,    0.9f).with("Textures", 0f, 0f, 0f).tipKind(10),
+        new Brush("Halftone",       1f,    1f,    1f,   1f,   0f,    0.15f).with("Textures", 0f, 0f, 0f).p("pattern", 1).p("patternScale", 12).p("patternDot", 0.35f),
+        new Brush("Halftone coarse", 1f,   1f,    1f,   1f,   0f,    0.15f).with("Textures", 0f, 0f, 0f).p("pattern", 1).p("patternScale", 26).p("patternDot", 0.38f),
         new Brush("Crosshatch",     1f,    0.5f,  1f,   0.9f, 0f,    0.7f).with("Textures", 0f, 0f, 0f).tipKind(11),
         new Brush("Grunge",         0.8f,  0.4f,  0.9f, 0.5f, 0.7f,  0.25f).with("Textures", 0f, 0f, 0f).tipKind(6).p("scatter", 0.3f).p("jitterSize", 0.4f).p("grainScale", 2.5f),
         new Brush("Paper texture",  1f,    0.2f,  0.6f, 0f,   1f,    0.1f).with("Textures", 0f, 0f, 0f).p("grainScale", 1.5f),
@@ -2313,6 +2318,37 @@ public class CanvasView extends View {
         tiltNow = Math.max(0, Math.min(1, t / 1.5708f));
     }
 
+    /**
+     * Halftone: one grid of dots fixed to the canvas (45°, like screen tone). A dab reveals every whole dot whose centre is
+     * inside it, so overlapping passes land on the same dots and never double up.
+     */
+    private void halftoneDab(float cx, float cy, float r, int a) {
+        Brush b = brush;
+        float S = Math.max(3, b.patternScale), R = Math.max(0.6f, S * b.patternDot);
+        final float k = 0.70710678f;
+        int x0 = Math.max(0, (int) (cx - r - S)), x1 = Math.min(docW - 1, (int) (cx + r + S));
+        int y0 = Math.max(0, (int) (cy - r - S)), y1 = Math.min(docH - 1, (int) (cy + r + S));
+        if (x0 > x1 || y0 > y1) return;
+        float r2 = r * r;
+        for (int y = y0; y <= y1; y++) {
+            int row = y * docW;
+            for (int x = x0; x <= x1; x++) {
+                float px = x + 0.5f, py = y + 0.5f;
+                float u = (px + py) * k, w = (px - py) * k;          // rotated grid coordinates
+                float gu = Math.round(u / S) * S, gw = Math.round(w / S) * S;
+                float dcx = (gu + gw) * k, dcy = (gu - gw) * k;      // nearest dot centre on the canvas
+                if ((dcx - cx) * (dcx - cx) + (dcy - cy) * (dcy - cy) > r2) continue; // only whole dots inside the brush
+                float d = (float) Math.hypot(u - gu, w - gw);
+                float c = Math.max(0, Math.min(1, R - d + 0.5f));  // anti-aliased dot edge
+                if (c <= 0) continue;
+                int v = (int) (a * c);
+                if (v > (mask[row + x] & 255)) mask[row + x] = (byte) v;
+            }
+        }
+        if (eventDirty.isEmpty()) eventDirty.set(x0, y0, x1 + 1, y1 + 1);
+        else eventDirty.union(x0, y0, x1 + 1, y1 + 1);
+    }
+
     private void stampOne(float cx, float cy, float p) {
         Brush b = brush;
         float r = diameter(p) / 2f * taper();
@@ -2328,6 +2364,7 @@ public class CanvasView extends View {
         float alphaJ = b.jitterOpacity > 0 ? 1 - b.jitterOpacity * rnd.nextFloat() : 1f;
         int a = (int) (255 * opacity * b.alpha * alphaJ * (b.minAlpha + (1 - b.minAlpha) * pr) * (1 - b.tiltOpacity * tiltNow * 0.85f) * (1 - b.speedOpacity * speedNow * 0.8f));
         if (a <= 0) return;
+        if (b.pattern >= 0.5f && !smudging) { halftoneDab(cx, cy, r, a); return; }
         float soft = Math.max(1f, r * (1 - b.hard));
         int x0 = Math.max(0, (int) (cx - r - 1)), x1 = Math.min(docW - 1, (int) (cx + r + 1));
         int y0 = Math.max(0, (int) (cy - r - 1)), y1 = Math.min(docH - 1, (int) (cy + r + 1));
@@ -2408,6 +2445,7 @@ public class CanvasView extends View {
         boolean lock = tgt().alphaLock;
         byte[] sm = sel;
         int ink0 = grey, bm = Math.round(brush.blend);
+        boolean patternPaint = brush.pattern >= 0.5f && !erasing && !smudging;
         for (int y = 0; y < h; y++) {
             int mrow = (r.top + y) * docW + r.left, brow = y * w;
             for (int x = 0; x < w; x++) {
@@ -2430,6 +2468,10 @@ public class CanvasView extends View {
                     }
                 }
                 else if (lock) { nA = A; nG = G + (ink - G) * m / 255; }
+                else if (patternPaint && G == ink) { // halftone over halftone: keep the darker of the two, never add up
+                    if (m <= A) continue;
+                    nA = m; nG = ink;
+                }
                 else {
                     int keep = A * (255 - m) / 255;
                     nA = m + keep;

@@ -432,4 +432,31 @@ public class BatchFourTest extends Base {
         act.onBackPressed();
         assertNull("Back closes it", get(act, "tlPlayer"));
     }
+
+    @Test public void halftone_brush_one_grid_no_double_up() {
+        cv.brush = brushNamed("Halftone");
+        cv.size = 120;
+        cv.grey = 0;
+        pen(new float[][]{{W * .3f, H * .5f}, {W * .5f, H * .5f}});
+        Bitmap one = L().copy(Bitmap.Config.ARGB_8888, false);
+        // a second pass over the same place, and overlapping it: no change where they overlap
+        pen(new float[][]{{W * .35f, H * .5f}, {W * .45f, H * .52f}});
+        pen(new float[][]{{W * .4f, H * .5f}, {W * .6f, H * .5f}});
+        Bitmap two = L();
+        int changed = 0, total = 0;
+        for (int y = 0; y < one.getHeight(); y++) for (int x = 0; x < one.getWidth(); x++) {
+            int a1 = one.getPixel(x, y) >>> 24;
+            if (a1 == 0) continue;
+            total++;
+            if (a1 != (two.getPixel(x, y) >>> 24)) changed++;
+        }
+        assertTrue(total > 500);
+        assertEquals("dots already there never get darker or shift", 0, changed);
+        // dots, not a solid area: about a third of the covered area is ink
+        int[] d = toDoc(W * .45f, H * .5f);
+        int ink = 0, n = 0;
+        for (int y = d[1] - 20; y < d[1] + 20; y++) for (int x = d[0] - 20; x < d[0] + 20; x++) { n++; if ((two.getPixel(x, y) >>> 24) > 128) ink++; }
+        assertTrue("halftone dots: " + ink + "/" + n, ink > n * 0.15 && ink < n * 0.7);
+        settle(); shot("96_halftone");
+    }
 }

@@ -93,6 +93,8 @@ Layout matches Procreate so you can switch between the two easily:
 - **Drawing Assist per layer**: the guide's Assisted drawing switch (and layer options) applies to the current layer.
 - **Share**: PNG files (each layer, into a folder) and Animated PNG.
 - **Text**: letter spacing, line spacing, underline, outline; layer options → Rasterize text.
+- **Halftone brushes** (Textures → Halftone, Halftone coarse): one dot grid fixed to the canvas; overlapping strokes
+  never double up, they just reveal more of the same dots. Any brush can do this: Brush Studio → Rendering → Halftone grid.
 - **More brushes** (about 50): new sets Calligraphy, Charcoals, Drawing, Textures, Spray paints, Elements.
 - **Shape / Grain source**: Brush Studio → Shape or Grain → Import a picture (Invert, or go back to round / no grain).
 - **Colour Fill**: Selection → Freehand, Rectangle or Ellipse with Colour Fill on: the shape is filled with the grey.

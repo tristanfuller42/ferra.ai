@@ -2070,7 +2070,9 @@ public class MainActivity extends Activity {
                 {"tiltSize", "Tilt → size (pen on its side)", 0f, 1f, "%"}, {"tiltOpacity", "Tilt → lighter", 0f, 1f, "%"},
                 {"speedSize", "Speed → thinner (fast strokes)", 0f, 1f, "%"}, {"speedOpacity", "Speed → lighter (fast strokes)", 0f, 1f, "%"}},
         {{"Rendering"}, {"render", "Rendering mode", 0f, 1f, "choice:Light glaze|Heavy glaze"},
-                {"blend", "Blend mode", 0f, 5f, "choice:Normal|Multiply|Darken|Lighten|Screen|Overlay"}},
+                {"blend", "Blend mode", 0f, 5f, "choice:Normal|Multiply|Darken|Lighten|Screen|Overlay"},
+                {"pattern", "Halftone grid (dots fixed to the canvas)", 0f, 1f, "choice:Off|On"},
+                {"patternScale", "Halftone spacing", 3f, 60f, "px"}, {"patternDot", "Halftone dot size", 0.1f, 0.7f, "%"}},
         {{"Properties"}, {"sizeScale", "Maximum size", 0.1f, 3f, "×"}, {"alpha", "Maximum opacity", 0.05f, 1f, "%"}},
         {{"About this brush"}},
     };
@@ -2190,7 +2192,7 @@ public class MainActivity extends Activity {
                 Runnable label2 = () -> {
                     float v = b.get(key);
                     if (inv) v = 1 - v;
-                    String shown = fmt.equals("°") ? Math.round(v) + "°" : fmt.equals("×") ? String.format("%.2f×", v) : Math.round(v * 100) + "%";
+                    String shown = fmt.equals("px") ? Math.round(v) + " px" : fmt.equals("°") ? Math.round(v) + "°" : fmt.equals("×") ? String.format("%.2f×", v) : Math.round(v * 100) + "%";
                     lab.setText(label + "   " + shown);
                 };
                 label2.run();
