@@ -173,6 +173,7 @@ public class MainActivity extends Activity {
         icon(side, Ui.REDO, (int) (40 * dp), v -> canvas.redo());
         canvas.onPicked = () -> pickBtn.setOn(false);
         canvas.onTouchStart = this::closePanels;
+        canvas.onTransformChanged = () -> { if (canvas.tool == CanvasView.MOVE) showTransformBar(); }; // mode chip follows undo
         canvas.onCopyMenu = () -> {
             Ui.PopMenu m = new Ui.PopMenu(this, canvas, Gravity.CENTER);
             String[] items = {"Cut", "Copy", "Copy all", "Duplicate", "Cut & Paste", "Paste"};

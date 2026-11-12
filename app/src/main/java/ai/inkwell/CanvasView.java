@@ -1466,7 +1466,7 @@ public class CanvasView extends View {
             removeCallbacks(shapeHold);
             removeCallbacks(pickHold);
             abortStroke();
-            if (target == moveT) beginMove();
+            if (target == moveT) { beginMove(); xfMark(); }
             if (selPath != null) { selPath = null; invalidate(); }
             liqDown = false;
             gStart = e.getEventTime();
@@ -1531,6 +1531,10 @@ public class CanvasView extends View {
                 removeCallbacks(pickHold);
                 removeCallbacks(undoHold);
                 if (picking) { picking = false; break; }
+                if (target == moveT) xfUnmarkIfSame();
+                if (target == moveT && action == MotionEvent.ACTION_UP && !holdUndoing && e.getEventTime() - gStart < 300 && gMoved < 40) {
+                    if (gMax == 2) undo(); else if (gMax == 3) redo(); // two/three-finger tap while transforming
+                }
                 if (target == view && action == MotionEvent.ACTION_UP) {
                     long dt = e.getEventTime() - gStart;
                     if (!holdUndoing && !scrubbed && dt < 300 && gMoved < 40) {
@@ -1580,6 +1584,8 @@ public class CanvasView extends View {
     public void beginMove() {
         if (moving) return;
         moving = true;
+        xfUndo.clear(); xfRedo.clear();
+        moveUndoSize = undoList.size();
         Layer l = tgt();
         moveEdit = new PixelEdit(l, new Rect(0, 0, docW, docH));
         selBeforeMove = selCopy();
@@ -1619,6 +1625,7 @@ public class CanvasView extends View {
     public void commitMove() {
         if (!moving) return;
         moving = false;
+        xfUndo.clear(); xfRedo.clear();
         Layer l = tgt();
         Matrix m = transformMatrix();
         Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
@@ -1664,6 +1671,7 @@ public class CanvasView extends View {
     public void flip(boolean horizontal) {
         if (tool != MOVE) return;
         beginMove();
+        xfMark();
         float[] c = contentCentre();
         moveT.postScale(horizontal ? -1 : 1, horizontal ? 1 : -1, c[0], c[1]);
         invalidate();
@@ -1672,6 +1680,7 @@ public class CanvasView extends View {
     public void rotate90() {
         if (tool != MOVE) return;
         beginMove();
+        xfMark();
         float[] c = contentCentre();
         moveT.postRotate(90, c[0], c[1]);
         invalidate();
@@ -1679,6 +1688,7 @@ public class CanvasView extends View {
 
     public void resetTransform() {
         if (!moving) return;
+        xfMark();
         moveT.reset();
         poly.reset();
         dstCorners = srcCorners.clone();
@@ -1697,6 +1707,7 @@ public class CanvasView extends View {
     /** Switch between uniform, freeform, distort and warp. */
     public void setXform(int mode) {
         beginMove();
+        if (mode != xform) xfMark();
         xform = mode;
         invalidate();
     }
@@ -1712,6 +1723,7 @@ public class CanvasView extends View {
                 float d = (float) Math.hypot(e.getX() - q[k * 2], e.getY() - q[k * 2 + 1]);
                 if (d < best) { best = d; dragHandle = k; }
             }
+            if (dragHandle >= 0) xfMark();
             return dragHandle >= 0;
         }
         if (dragHandle < 0) return false;
@@ -1742,7 +1754,7 @@ public class CanvasView extends View {
                 poly.setPolyToPoly(srcCorners, 0, dstCorners, 0, 4);
             }
             invalidate();
-        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) dragHandle = -1;
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) { dragHandle = -1; xfUnmarkIfSame(); }
         return true;
     }
 
@@ -2405,7 +2417,61 @@ public class CanvasView extends View {
         changed();
     }
 
+    // ---- Step-by-step undo while transforming (before Done) ----
+    private final ArrayList<float[]> xfUndo = new ArrayList<>(), xfRedo = new ArrayList<>();
+    private int moveUndoSize;
+
+    private float[] xfState() {
+        float[] st = new float[9 + 9 + 8 + 32 + 1];
+        float[] m = new float[9];
+        moveT.getValues(m); System.arraycopy(m, 0, st, 0, 9);
+        poly.getValues(m); System.arraycopy(m, 0, st, 9, 9);
+        System.arraycopy(dstCorners, 0, st, 18, 8);
+        System.arraycopy(warp, 0, st, 26, 32);
+        st[58] = xform;
+        return st;
+    }
+
+    private void xfRestore(float[] st) {
+        moveT.setValues(java.util.Arrays.copyOfRange(st, 0, 9));
+        poly.setValues(java.util.Arrays.copyOfRange(st, 9, 18));
+        dstCorners = java.util.Arrays.copyOfRange(st, 18, 26);
+        System.arraycopy(st, 26, warp, 0, 32);
+        xform = (int) st[58];
+        invalidate();
+    }
+
+    /** Remembers the transform before a change (a drag, pinch, handle drag, flip, rotate, reset). */
+    private void xfMark() {
+        if (!moving) return;
+        xfUndo.add(xfState());
+        xfRedo.clear();
+    }
+
+    /** Drops the last mark if the gesture didn't change anything (e.g. a tap). */
+    private void xfUnmarkIfSame() {
+        if (xfUndo.isEmpty()) return;
+        if (java.util.Arrays.equals(xfUndo.get(xfUndo.size() - 1), xfState())) xfUndo.remove(xfUndo.size() - 1);
+    }
+
+    public Runnable onTransformChanged;
+
+    /** Puts the lifted content back exactly where it was and ends the transform with no undo step. */
+    private void cancelMove() {
+        moveT.reset(); poly.reset(); resetWarp(); dstCorners = srcCorners.clone();
+        int keep = Math.min(moveUndoSize, undoList.size());
+        commitMove();
+        while (undoList.size() > keep) undoList.remove(undoList.size() - 1); // the move never happened
+        afterHistory();
+    }
+
     public void undo() {
+        if (moving) { // step back through the transform without leaving it
+            if (!xfUndo.isEmpty()) { xfRedo.add(xfState()); xfRestore(xfUndo.remove(xfUndo.size() - 1)); }
+            else cancelMove();
+            if (onTransformChanged != null) onTransformChanged.run();
+            return;
+        }
         commitMove();
         if (undoList.isEmpty()) return;
         Edit e = undoList.remove(undoList.size() - 1);
@@ -2415,6 +2481,12 @@ public class CanvasView extends View {
     }
 
     public void redo() {
+        if (moving && !xfRedo.isEmpty()) {
+            xfUndo.add(xfState());
+            xfRestore(xfRedo.remove(xfRedo.size() - 1));
+            if (onTransformChanged != null) onTransformChanged.run();
+            return;
+        }
         commitMove();
         if (redoList.isEmpty()) return;
         Edit e = redoList.remove(redoList.size() - 1);

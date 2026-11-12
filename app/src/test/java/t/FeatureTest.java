@@ -559,4 +559,43 @@ public class FeatureTest extends Base {
         assertEquals("background restored", 40, cv.bgGrey);
         assertTrue(cv.bgVisible);
     }
+
+    @Test public void undo_steps_back_through_a_move_before_done() {
+        cv.size = 20;
+        line(W * .4f, H * .3f, W * .6f, H * .3f);
+        int[] a = toDoc(W * .5f, H * .3f);
+        // select it
+        cv.setTool(CanvasView.SELECT); cv.selKind = 2;
+        stroke(new float[][]{{W * .35f, H * .25f}, {W * .65f, H * .35f}}, MotionEvent.TOOL_TYPE_FINGER, 1);
+        assertNotNull(cv.sel);
+        call(act, "setTool", CanvasView.MOVE);
+        line(W * .5f, H * .5f, W * .5f, H * .6f);   // move 1: down 0.1H
+        line(W * .5f, H * .5f, W * .5f, H * .6f);   // move 2: down another 0.1H
+        cv.flip(true);                              // step 3
+        assertEquals("still transforming", CanvasView.MOVE, cv.tool);
+        cv.undo();                                  // undo flip
+        cv.undo();                                  // undo move 2
+        assertEquals("still transforming after undo", CanvasView.MOVE, cv.tool);
+        call(act, "setTool", CanvasView.DRAW);      // Done
+        int[] b = toDoc(W * .5f, H * .4f);
+        assertTrue("kept only the first move", (L().getPixel(b[0], b[1]) >>> 24) > 200);
+        assertTrue("not at the original place", (L().getPixel(a[0], a[1]) >>> 24) < 50);
+        // undo everything step by step inside a new transform
+        call(act, "setTool", CanvasView.MOVE);
+        line(W * .5f, H * .5f, W * .5f, H * .6f);
+        cv.undo();                                  // undo that move
+        cv.undo();                                  // nothing left: content goes back, transform ends cleanly
+        call(act, "setTool", CanvasView.DRAW);
+        assertTrue("back after the first move", (L().getPixel(b[0], b[1]) >>> 24) > 200);
+        cv.redo();
+        assertTrue("redo has nothing from the cancelled move", (L().getPixel(b[0], b[1]) >>> 24) > 200);
+        // redo inside a transform
+        call(act, "setTool", CanvasView.MOVE);
+        line(W * .5f, H * .5f, W * .5f, H * .6f);
+        cv.undo();
+        cv.redo();
+        call(act, "setTool", CanvasView.DRAW);
+        int[] c = toDoc(W * .5f, H * .5f);
+        assertTrue("redo re-applied the move", (L().getPixel(c[0], c[1]) >>> 24) > 200);
+    }
 }
