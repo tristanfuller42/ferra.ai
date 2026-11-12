@@ -61,7 +61,7 @@ Layout matches Procreate so you can switch between the two easily:
   tap a title to rename.
 - **Text**: Actions → Add → Add text. Font, size, bold, alignment; edit later from layer options.
 - **Animation**: tap a frame for hold duration, duplicate, delete; Loop / Ping-Pong / One shot.
-- **Prefs**: light interface, interface size, brush cursor, global pressure curve and smoothing, rapid-undo delay.
+- **Prefs**: interface size, brush cursor, global pressure curve and smoothing, rapid-undo delay.
   Drag the sidebar's ⋯ grip to move it up or down.
 - **Transform**: Snapping (to canvas centre/edges) and Smooth/Nearest interpolation.
 - **Adjustments**: Layer or Pencil mode (Pencil = paint the adjustment with the brush).

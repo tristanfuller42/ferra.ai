@@ -51,6 +51,32 @@ public class ProcreateParityTest extends Base {
         swipe(rx, ry, 260);
         assertEquals("swipe right selects", 1, ((Set<?>) get(act, "multi")).size());
         shot("70_layers_multiselect");
+        // swipe left shows Lock / Duplicate / Delete inside the row (no floating menu)
+        View row2 = null;
+        for (int i = 0; i < ((android.view.ViewGroup) list).getChildCount(); i++) { View c = ((android.view.ViewGroup) list).getChildAt(i); if (Integer.valueOf(0).equals(c.getTag())) row2 = c; }
+        row2.getLocationOnScreen(loc);
+        int n0 = cv.layers.size();
+        swipe(loc[0] + row2.getWidth() * .6f, loc[1] + row2.getHeight() / 2f, -260);
+        View dup = rowButton(list, 0, "Duplicate");
+        assertNotNull("swipe left shows Duplicate in the row", dup);
+        assertNull("no floating menu", Ui_openPop());
+        shot("71_layer_swipe_buttons");
+        dup.performClick(); settle();
+        assertEquals("duplicated", n0 + 1, cv.layers.size());
+        assertNull("buttons closed after use", rowButton(list, 0, "Duplicate"));
+        // swipe left again, then tap the row: buttons close, nothing else happens
+        row2 = null;
+        for (int i = 0; i < ((android.view.ViewGroup) list).getChildCount(); i++) { View c = ((android.view.ViewGroup) list).getChildAt(i); if (Integer.valueOf(0).equals(c.getTag())) row2 = c; }
+        row2.getLocationOnScreen(loc);
+        swipe(loc[0] + row2.getWidth() * .4f, loc[1] + row2.getHeight() / 2f, -260);
+        assertNotNull(rowButton(list, 0, "Delete"));
+        for (int i = 0; i < ((android.view.ViewGroup) list).getChildCount(); i++) { View c = ((android.view.ViewGroup) list).getChildAt(i); if (Integer.valueOf(0).equals(c.getTag())) { c.performClick(); break; } }
+        settle();
+        assertNull("tap closes the buttons", rowButton(list, 0, "Delete"));
+        assertEquals(n0 + 1, cv.layers.size());
+        cv.undo();
+        assertEquals(n0, cv.layers.size());
+        multi(act).clear();
         // group / merge / delete several
         cv.groupLayers(Arrays.asList(cv.layers.get(0), cv.layers.get(1)));
         assertTrue(cv.layers.get(0).group != 0 && cv.layers.get(0).group == cv.layers.get(1).group);
@@ -83,6 +109,28 @@ public class ProcreateParityTest extends Base {
     Object latestPop() {
         try { java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui$Pop").getDeclaredField("latest"); f.setAccessible(true); return f.get(null); }
         catch (Exception e) { throw new RuntimeException(e); }
+    }
+
+    static Set<?> multi(Object act) { return (Set<?>) get(act, "multi"); }
+
+    View rowButton(View list, int tag, String label) {
+        android.view.ViewGroup g = (android.view.ViewGroup) list;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            View c = g.getChildAt(i);
+            if (!Integer.valueOf(tag).equals(c.getTag())) continue;
+            android.view.ViewGroup r = (android.view.ViewGroup) c;
+            for (int k = 0; k < r.getChildCount(); k++)
+                if (r.getChildAt(k) instanceof TextView && label.equals(String.valueOf(((TextView) r.getChildAt(k)).getText()))) return r.getChildAt(k);
+        }
+        return null;
+    }
+
+    Object Ui_openPop() {
+        try {
+            java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui$Pop").getDeclaredField("open"); f.setAccessible(true);
+            for (Object p : (List<?>) f.get(null)) if (get(p, "c") == act && ((android.widget.PopupWindow) get(p, "win")).isShowing()) return p;
+            return null;
+        } catch (Exception e) { throw new RuntimeException(e); }
     }
 
     /** A realistic sideways finger swipe through the whole window, with some up/down wobble. */
@@ -304,16 +352,15 @@ public class ProcreateParityTest extends Base {
         android.content.Intent next = Shadows.shadowOf(act).getNextStartedActivity();
         assertNotNull(next);
         assertEquals(android.provider.MediaStore.ACTION_IMAGE_CAPTURE, next.getAction());
-        // prefs: global curve and light mode
+        // prefs: global curve and interface size
         cv.globalCurve = 2f;
         android.content.SharedPreferences prefs = act.getSharedPreferences("inkwell", 0);
-        prefs.edit().putBoolean("light", true).putInt("uiSize", 2).commit();
+        prefs.edit().putInt("uiSize", 2).commit();
         ctl.pause().stop(); settle();
         launch(); closeGallery();
         call(act, "togglePanel"); settle();
-        shot("79_light_mode_large");
-        prefs.edit().putBoolean("light", false).putInt("uiSize", 1).commit();
-        try { java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui").getDeclaredField("light"); f.setAccessible(true); f.set(null, false); } catch (Exception e) { }
+        shot("79_large_interface");
+        prefs.edit().putInt("uiSize", 1).commit();
     }
 
     @Test public void finger_erases_after_stylus() {

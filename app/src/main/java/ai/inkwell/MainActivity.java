@@ -124,7 +124,6 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("inkwell", MODE_PRIVATE);
         int uiSize = prefs.getInt("uiSize", 1);                  // 0 small, 1 medium, 2 large
         int ib = (int) ((uiSize == 0 ? 38 : uiSize == 2 ? 52 : 44) * dp);
-        Ui.light = prefs.getBoolean("light", false);
         LinearLayout left = new LinearLayout(this), right = new LinearLayout(this);
         left.setGravity(Gravity.CENTER_VERTICAL);
         right.setGravity(Gravity.CENTER_VERTICAL);
@@ -155,8 +154,6 @@ public class MainActivity extends Activity {
         top.addView(left, new FrameLayout.LayoutParams(-2, -1, Gravity.START));
         top.addView(right, new FrameLayout.LayoutParams(-2, -1, Gravity.END));
         View scroll = top; // hidden by four-finger tap
-        Ui.lighten(top);
-        Ui.lighten(colorBtn); // the colour circle shows the real grey
 
         // ---- Sidebar: size, eyedropper, opacity, undo/redo ----
         side = new LinearLayout(this);
@@ -272,8 +269,6 @@ public class MainActivity extends Activity {
         sideLp = new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL);
         sideLp.setMargins((int) (6 * dp), 0, (int) (6 * dp), 0);
         stage.addView(side, sideLp);
-        Ui.lighten(side);
-        Ui.lighten(panel);
         bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.VERTICAL);
         android.graphics.drawable.GradientDrawable bbg = new android.graphics.drawable.GradientDrawable();
@@ -282,7 +277,6 @@ public class MainActivity extends Activity {
         bottom.setBackground(bbg);
         bottom.setPadding((int) (8 * dp), (int) (4 * dp), (int) (8 * dp), (int) (4 * dp));
         bottom.setVisibility(View.GONE);
-        Ui.lighten(bottom);
         FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         blp.setMargins((int) (8 * dp), 0, (int) (8 * dp), (int) (10 * dp));
         stage.addView(bottom, blp);
@@ -296,7 +290,6 @@ public class MainActivity extends Activity {
         timeline.setOrientation(LinearLayout.VERTICAL);
         timeline.setBackgroundColor(Ui.BAR);
         timeline.setVisibility(View.GONE);
-        Ui.lighten(timeline);
         root.addView(timeline, new LinearLayout.LayoutParams(-1, -2));
         this.stage = stage;
         shell = new FrameLayout(this);
@@ -1177,7 +1170,6 @@ public class MainActivity extends Activity {
                 pop.item("Delete recorded time-lapse", true, () -> confirm("Delete the recorded time-lapse?", () -> { for (File f : tlFrames()) f.delete(); }));
                 break;
             case 4: // Prefs
-                pop.toggle("Light interface", Ui.light, v -> { prefs.edit().putBoolean("light", v).apply(); pop.win.dismiss(); saveCurrent(this::recreate); });
                 pop.toggle("Right-hand interface", !left, v -> action(7, anchor));
                 pop.toggle("Brush cursor", canvas.showCursor, v -> { canvas.showCursor = v; prefs.edit().putBoolean("cursor", v).apply(); });
                 pop.section("Finger when using a stylus");
@@ -1550,7 +1542,6 @@ public class MainActivity extends Activity {
         body.addView(ss, new LinearLayout.LayoutParams(0, -1, 1f));
         col.addView(body, new LinearLayout.LayoutParams(-1, 0, 1f));
         studio.addView(col);
-        Ui.lighten(studio);
         shell.addView(studio);
     }
 
@@ -1653,7 +1644,6 @@ public class MainActivity extends Activity {
                 return true;
             }
         };
-        Ui.lighten(strip); Ui.lighten(preview); // true greys inside the (inverted) light panel
         box.addView(strip, new LinearLayout.LayoutParams(-1, (int) (56 * dp)));
         sb.setProgress(255 - canvas.grey);
         sb.setOnSeekBarChangeListener(new Slider() {
@@ -1699,7 +1689,6 @@ public class MainActivity extends Activity {
             d.setStroke(1, 0xFF636366);
             v.setBackground(d);
             v.setOnClickListener(x -> sb.setProgress(255 - g));
-            Ui.lighten(v);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (28 * dp), (int) (28 * dp));
             lp.setMargins(2, 2, (int) (4 * dp), 2);
             sw.addView(v, lp);
@@ -1747,9 +1736,11 @@ public class MainActivity extends Activity {
     /** Tapping the canvas closes open menus and the Layers panel, like Procreate. Returns true if something closed. */
     private boolean closePanels() {
         boolean closed = false;
-        Ui.Pop p = Ui.Pop.latest;
-        if (p != null && p.c == this && p.win.isShowing()) { p.win.dismiss(); closed = true; } // only this screen's popovers
+        for (Ui.Pop p : new java.util.ArrayList<>(Ui.Pop.open)) // only this screen's popovers
+            if (p.c == this && p.win.isShowing()) { p.win.dismiss(); closed = true; }
+        Ui.Pop.open.removeIf(p -> !p.win.isShowing());
         if (panel != null && panel.getVisibility() == View.VISIBLE) {
+            swiped = null;
             panel.setVisibility(View.GONE);
             layersBtn.setOn(false);
             closed = true;
@@ -1758,6 +1749,7 @@ public class MainActivity extends Activity {
     }
 
     private void togglePanel() {
+        swiped = null;
         panel.setVisibility(panel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
         layersBtn.setOn(panel.getVisibility() == View.VISIBLE);
         refreshPanel();
@@ -1779,6 +1771,7 @@ public class MainActivity extends Activity {
         if (canvas.anim) refreshTimeline();
         if (panel == null || panel.getVisibility() != View.VISIBLE) return;
         layerList.removeAllViews();
+        if (swiped != null && !canvas.layers.contains(swiped)) swiped = null;
         opacityBar.setProgress(canvas.cur().opacity);
         int tw = (int) (44 * dp), th = Math.max(1, tw * canvas.docH / canvas.docW);
         int lastGroup = 0;
@@ -1795,7 +1788,6 @@ public class MainActivity extends Activity {
             r.setBackgroundColor(multi.contains(l) ? 0xFF2F5F95 : i == canvas.current ? 0xFF48484A : 0);
             r.setTag(idx);
             ImageView iv = new ImageView(this);
-            Ui.lighten(iv); // artwork keeps its true greys in light mode
             iv.setImageBitmap(thumbOf(l, tw, th));
             iv.setBackgroundColor(i == canvas.current && !l.editMask ? Ui.ACCENT : 0xFF888888);
             iv.setPadding(2, 2, 2, 2);
@@ -1803,7 +1795,6 @@ public class MainActivity extends Activity {
             r.addView(iv, new LinearLayout.LayoutParams(tw, th + 4));
             if (l.mask != null) {
                 ImageView mv = new ImageView(this);
-                Ui.lighten(mv);
                 mv.setImageBitmap(thumbOf(l.mask, tw, th));
                 mv.setBackgroundColor(i == canvas.current && l.editMask ? Ui.ACCENT : 0xFF555555);
                 mv.setPadding(2, 2, 2, 2);
@@ -1824,15 +1815,21 @@ public class MainActivity extends Activity {
             bl.setTextColor(l.blend == 0 ? 0xFF9A9A9E : Ui.ACCENT);
             bl.setPadding((int) (8 * dp), (int) (8 * dp), (int) (4 * dp), (int) (8 * dp));
             bl.setOnClickListener(v -> blendMenu(v, idx));
-            r.addView(bl);
             TextView vis = new TextView(this);
             vis.setText(l.visible ? "●" : "○");
             vis.setTextSize(16);
             vis.setTextColor(l.visible ? Color.WHITE : 0xFF888888);
             vis.setPadding((int) (8 * dp), (int) (8 * dp), (int) (8 * dp), (int) (8 * dp));
             vis.setOnClickListener(v -> canvas.toggleVisible(idx));
-            r.addView(vis);
-            r.setOnClickListener(v -> { if (idx == canvas.current) layerOptions(v, idx); else canvas.select(idx); });
+            if (l == swiped) { // swiped left: Lock / Duplicate / Delete buttons inside the row, like Procreate
+                swipeButton(r, l.locked ? "Unlock" : "Lock", 0xFF636366, () -> canvas.toggleLock(idx));
+                swipeButton(r, "Duplicate", 0xFF636366, () -> { canvas.select(idx); if (!canvas.duplicate()) full(); });
+                if (canvas.layers.size() > 1) swipeButton(r, "Delete", 0xFFD9443B, () -> { canvas.select(idx); canvas.deleteLayer(); });
+            } else { r.addView(bl); r.addView(vis); }
+            r.setOnClickListener(v -> {
+                if (swiped != null) { swiped = null; refreshPanel(); return; } // tap anywhere closes the buttons
+                if (idx == canvas.current) layerOptions(v, idx); else canvas.select(idx);
+            });
             View.OnTouchListener g = rowGestures(r, l, idx);
             for (int c = 0; c < r.getChildCount(); c++) if (r.getChildAt(c).isClickable()) r.getChildAt(c).setOnTouchListener(g);
             r.setOnTouchListener(g);
@@ -1890,7 +1887,10 @@ public class MainActivity extends Activity {
                     if (st[2] == 2) {
                         row.setTranslationX(0);
                         if (dx < -48 * dp) layerSwipeActions(row, l, idx); // swipe left: Lock / Duplicate / Delete
-                        else if (dx > 48 * dp) { if (!multi.remove(l)) multi.add(l); refreshPanel(); } // swipe right: select
+                        else if (dx > 48 * dp) { // swipe right: close the buttons, or select
+                            if (swiped != null) swiped = null; else if (!multi.remove(l)) multi.add(l);
+                            refreshPanel();
+                        }
                         return true;
                     }
                     return false;
@@ -1919,12 +1919,25 @@ public class MainActivity extends Activity {
         canvas.moveLayerTo(idx, target);
     }
 
+    private CanvasView.Layer swiped; // layer whose row shows Lock / Duplicate / Delete
+
     private void layerSwipeActions(View row, CanvasView.Layer l, int idx) {
-        Ui.Pop pop = new Ui.Pop(this, 200);
-        pop.item(l.locked ? "Unlock" : "Lock", true, () -> canvas.toggleLock(idx));
-        pop.item("Duplicate", true, () -> { canvas.select(idx); if (!canvas.duplicate()) full(); });
-        pop.item("Delete", canvas.layers.size() > 1, () -> { canvas.select(idx); canvas.deleteLayer(); });
-        pop.show(row);
+        swiped = l;
+        refreshPanel();
+    }
+
+    private void swipeButton(LinearLayout r, String label, int color, Runnable action) {
+        TextView b = new TextView(this);
+        b.setText(label);
+        b.setTextColor(Color.WHITE);
+        b.setTextSize(13);
+        b.setGravity(Gravity.CENTER);
+        b.setBackgroundColor(color);
+        b.setPadding((int) (10 * dp), (int) (12 * dp), (int) (10 * dp), (int) (12 * dp));
+        b.setOnClickListener(v -> { swiped = null; action.run(); refreshPanel(); });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -1);
+        lp.leftMargin = (int) (2 * dp);
+        r.addView(b, lp);
     }
 
     /** Pinch two layers together in the list to merge them and everything between. */
@@ -1970,7 +1983,6 @@ public class MainActivity extends Activity {
         d.setStroke((int) (2 * dp), 0xFF636366);
         sw.setBackground(d);
         sw.setAlpha(canvas.bgVisible ? 1f : 0.35f);
-        Ui.lighten(sw);
         r.addView(sw, new LinearLayout.LayoutParams((int) (44 * dp), (int) (32 * dp)));
         TextView n = new TextView(this);
         n.setText("Background colour");
@@ -2013,7 +2025,6 @@ public class MainActivity extends Activity {
             dr.setStroke(1, 0xFF636366);
             v.setBackground(dr);
             v.setOnClickListener(x -> sb.setProgress(g));
-            Ui.lighten(v);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (26 * dp), (int) (26 * dp));
             lp.setMargins(2, 2, (int) (4 * dp), 2);
             sw.addView(v, lp);
@@ -2298,7 +2309,6 @@ public class MainActivity extends Activity {
             ImageView iv = new ImageView(this);
             iv.setBackgroundColor(Color.WHITE);
             iv.setImageBitmap(thumbOf(canvas.layers.get(i), tw, th));
-            Ui.lighten(iv);
             iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
             cell.addView(iv, new LinearLayout.LayoutParams(tw, showH));
             TextView n = new TextView(this);
@@ -2842,7 +2852,6 @@ public class MainActivity extends Activity {
             sv.addView(galleryGrid);
             col.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
             gallery.addView(col);
-            Ui.lighten(gallery);
             shell.addView(gallery);
         }
         gallery.setVisibility(View.VISIBLE);
@@ -2930,7 +2939,6 @@ public class MainActivity extends Activity {
                 card.setOrientation(LinearLayout.VERTICAL);
                 card.setPadding((int) (6 * dp), (int) (8 * dp), (int) (6 * dp), (int) (4 * dp));
                 ImageView iv = new ImageView(this);
-                Ui.lighten(iv);
                 iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 iv.setBackgroundColor(0xFF48484A);
                 iv.setPadding(10, 10, 10, 10);
@@ -2956,7 +2964,6 @@ public class MainActivity extends Activity {
             card.setOrientation(LinearLayout.VERTICAL);
             card.setPadding((int) (6 * dp), (int) (8 * dp), (int) (6 * dp), (int) (4 * dp));
             ImageView iv = new ImageView(this);
-            Ui.lighten(iv);
             iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
             iv.setBackgroundColor(picked.contains(id) ? 0xFF34C759 : id.equals(curId) ? Ui.ACCENT : 0xFF2C2C2E);
             iv.setPadding(3, 3, 3, 3);
