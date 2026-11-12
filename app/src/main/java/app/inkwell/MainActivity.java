@@ -84,7 +84,6 @@ public class MainActivity extends Activity {
         canvas.opacity = tOp[k];
         if (sizeS != null) { sizeS.value = (float) Math.sqrt(Math.max(0, canvas.size - 1) / 149f); sizeS.invalidate(); }
         if (opS != null) { opS.value = canvas.opacity; opS.invalidate(); }
-        if (brushName != null) updateBrush();
     }
 
     private void loadToolPrefs() {
@@ -97,7 +96,6 @@ public class MainActivity extends Activity {
 
     private Ui.Icon brushBtn, eraseBtn, moveBtn, colorBtn, layersBtn, pickBtn, smudgeBtn, adjustBtn, selectBtn;
     private LinearLayout bottom;
-    private TextView brushName;
     private LinearLayout side;
     private FrameLayout.LayoutParams sideLp;
     private LinearLayout panel, layerList;
@@ -137,12 +135,6 @@ public class MainActivity extends Activity {
             else setTool(CanvasView.SELECT);
         });
         moveBtn = icon(left, Ui.MOVE, ib, v -> setTool(canvas.tool == CanvasView.MOVE ? CanvasView.DRAW : CanvasView.MOVE));
-        brushName = new TextView(this);
-        brushName.setTextColor(0xFF9A9A9E);
-        brushName.setTextSize(13);
-        brushName.setPadding(0, 0, (int) (6 * dp), 0);
-        brushName.setOnClickListener(v -> pickBrush());
-        right.addView(brushName);
         brushBtn = icon(right, Ui.BRUSH, ib, v -> { if (canvas.tool == CanvasView.DRAW) pickBrush(); else setTool(CanvasView.DRAW); });
         smudgeBtn = icon(right, Ui.SMUDGE, ib, v -> { if (canvas.tool == CanvasView.SMUDGE) pickBrush(); else setTool(CanvasView.SMUDGE); });
         eraseBtn = icon(right, Ui.ERASER, ib, v -> { if (canvas.tool == CanvasView.ERASE) pickBrush(); else setTool(CanvasView.ERASE); });
@@ -211,7 +203,6 @@ public class MainActivity extends Activity {
         canvas.onHistory = this::hud;
         canvas.onViewChanged = (z, a) -> hud(Math.round(z) + "%   ·   " + Math.round(a) + "°");
         setTool(CanvasView.DRAW);
-        updateBrush();
         updateColor();
 
         // ---- Layers panel ----
@@ -1357,7 +1348,6 @@ public class MainActivity extends Activity {
             CanvasView.BRUSHES.add(b);
             canvas.brush = b;
             saveBrush(b);
-            updateBrush();
             brushStudio(b);
         });
         pop.add(head);
@@ -1405,7 +1395,6 @@ public class MainActivity extends Activity {
                 row.setOnClickListener(v -> {
                     if (canvas.brush == br) { pop.win.dismiss(); brushStudio(br); return; }
                     canvas.brush = br;
-                    updateBrush();
                     fill[0].run();
                 });
                 row.setOnLongClickListener(v -> { brushMenu(v, br, pop); return true; });
@@ -1424,7 +1413,7 @@ public class MainActivity extends Activity {
     /** Long-press a brush: duplicate / reset / delete. */
     private void brushMenu(View anchor, CanvasView.Brush br, Ui.Pop lib) {
         Ui.Pop pop = new Ui.Pop(this, 240);
-        pop.item("Edit in Brush Studio", true, () -> { lib.win.dismiss(); canvas.brush = br; updateBrush(); brushStudio(br); });
+        pop.item("Edit in Brush Studio", true, () -> { lib.win.dismiss(); canvas.brush = br; brushStudio(br); });
         pop.item("Duplicate", true, () -> {
             CanvasView.Brush b = br.copy(br.name + " copy");
             CanvasView.BRUSHES.add(CanvasView.BRUSHES.indexOf(br) + 1, b);
@@ -1443,7 +1432,6 @@ public class MainActivity extends Activity {
             if (br.file != null) br.file.delete();
             CanvasView.BRUSHES.remove(br);
             if (canvas.brush == br) canvas.brush = CanvasView.BRUSHES.get(0);
-            updateBrush();
             lib.win.dismiss();
         }));
         pop.show(anchor);
@@ -1501,7 +1489,7 @@ public class MainActivity extends Activity {
             previews.remove(b);
             closeStudio();
         });
-        chip(head, "Done", true, v -> { previews.remove(b); saveBrush(b); updateBrush(); closeStudio(); });
+        chip(head, "Done", true, v -> { previews.remove(b); saveBrush(b); closeStudio(); });
         col.addView(head, new LinearLayout.LayoutParams(-1, (int) (52 * dp)));
         // live preview "drawing pad"
         ImageView pad = new ImageView(this);
@@ -1640,7 +1628,6 @@ public class MainActivity extends Activity {
         return bm;
     }
 
-    private void updateBrush() { brushName.setText(canvas.brush.name); }
 
     private void updateColor() {
         int g = canvas.grey;
@@ -2545,7 +2532,6 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     CanvasView.BRUSHES.addAll(bs);
                     canvas.brush = bs.get(0);
-                    updateBrush();
                     toast(bs.size() + " brush(es) imported");
                 });
             } catch (Throwable e) {
