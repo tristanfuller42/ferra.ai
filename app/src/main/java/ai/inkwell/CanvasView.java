@@ -116,7 +116,17 @@ public class CanvasView extends View {
     public int grey = 0;                 // ink: 0 = black .. 255 = white
     public float size = 12f;
     private boolean stylusSeen;
-    public boolean fingerPaint;          // false = once a stylus is used, fingers only navigate (palm rejection)
+    /** What one finger does once a stylus has been used: 0 navigate (palm rejection), 1 paint, 2 erase. */
+    public int fingerMode = 2;
+    /** Called with true when a finger starts erasing (load the Eraser's settings) and false when it ends. */
+    public java.util.function.Consumer<Boolean> onFingerErase;
+    private boolean fingerErasing;
+
+    private void endFingerErase() {
+        if (!fingerErasing) return;
+        fingerErasing = false;
+        if (onFingerErase != null) onFingerErase.accept(false);
+    }
 
     private final Paint layerPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final Paint copy = new Paint();
@@ -1124,6 +1134,7 @@ public class CanvasView extends View {
         commitStroke();
         wasShape = false;
         shaping = false;
+        endFingerErase();
         invalidate();
     }
 
@@ -1163,6 +1174,13 @@ public class CanvasView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent e) {
+        boolean r = touch(e);
+        int a = e.getActionMasked();
+        if ((a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) && !shapeEdit && !stroking) endFingerErase();
+        return r;
+    }
+
+    private boolean touch(MotionEvent e) {
         if (docW == 0) return false;
         int action = e.getActionMasked();
         if (action == MotionEvent.ACTION_DOWN) swallow = onTouchStart != null && onTouchStart.getAsBoolean();
@@ -1218,9 +1236,16 @@ public class CanvasView extends View {
         if (e.getPointerCount() >= 2 || gesture) return handleGesture(e, action, view);
         if (tool == SELECT) return selectTouch(e, action);
         if (tool == ADJUST && !adjPencil) return adjustTouch(e, action);
-        if (stylusSeen && !fingerPaint && type == MotionEvent.TOOL_TYPE_FINGER) return handleGesture(e, action, view);
+        if (stylusSeen && fingerMode != 1 && type == MotionEvent.TOOL_TYPE_FINGER) {
+            boolean paintTool = tool == DRAW || tool == SMUDGE || tool == ERASE || tool == CLONE;
+            if (fingerMode != 2 || !paintTool) return handleGesture(e, action, view);
+            if (action == MotionEvent.ACTION_DOWN && !fingerErasing && tool != ERASE) {
+                fingerErasing = true;
+                if (onFingerErase != null) onFingerErase.accept(true);
+            }
+        }
         if (tool == LIQUIFY) return liquifyTouch(e, action);
-        if (tool == CLONE && action == MotionEvent.ACTION_DOWN && (!cloneSet || cloneArmed)) {
+        if (tool == CLONE && !fingerErasing && action == MotionEvent.ACTION_DOWN && (!cloneSet || cloneArmed)) {
             view.invert(inverse);
             map(e.getX(), e.getY());
             cloneSrcX = pt[0]; cloneSrcY = pt[1];
@@ -1234,7 +1259,7 @@ public class CanvasView extends View {
         switch (action) {
             case MotionEvent.ACTION_DOWN:
                 if (isLocked()) { stroking = false; return true; }
-                erasing = tool == ERASE || type == MotionEvent.TOOL_TYPE_ERASER
+                erasing = tool == ERASE || fingerErasing || type == MotionEvent.TOOL_TYPE_ERASER
                         || (e.getButtonState() & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0;
                 smudging = tool == SMUDGE && !erasing;
                 cloning = tool == CLONE && !erasing;

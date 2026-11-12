@@ -318,7 +318,10 @@ public class MainActivity extends Activity {
         canvas.onCommitted = this::captureTimelapse;
         canvas.onFrame = () -> { if (refView != null && refView.getVisibility() == View.VISIBLE && refMode == 0) refContent.invalidate(); };
         tlOn = prefs.getBoolean("timelapse", true);
-        canvas.fingerPaint = prefs.getBoolean("fingerPaint", false);
+        canvas.fingerMode = prefs.getInt("fingerMode", prefs.getBoolean("fingerPaint", false) ? 1 : 2);
+        canvas.onFingerErase = on -> { // finger erases with the Eraser's own brush, size and opacity
+            if (on) { storeTool(canvas.tool); applyTool(CanvasView.ERASE); } else applyTool(canvas.tool);
+        };
         canvas.showCursor = prefs.getBoolean("cursor", false);
         canvas.globalCurve = prefs.getFloat("gCurve", 1f);
         canvas.globalSmooth = prefs.getFloat("gSmooth", 0f);
@@ -1177,7 +1180,14 @@ public class MainActivity extends Activity {
                 pop.toggle("Light interface", Ui.light, v -> { prefs.edit().putBoolean("light", v).apply(); pop.win.dismiss(); saveCurrent(this::recreate); });
                 pop.toggle("Right-hand interface", !left, v -> action(7, anchor));
                 pop.toggle("Brush cursor", canvas.showCursor, v -> { canvas.showCursor = v; prefs.edit().putBoolean("cursor", v).apply(); });
-                pop.toggle("Fingers paint when using a stylus", canvas.fingerPaint, v -> action(14, anchor));
+                pop.section("Finger when using a stylus");
+                LinearLayout fm = barRow();
+                String[] fmn = {"Navigate", "Paint", "Erase"};
+                for (int i = 0; i < 3; i++) {
+                    int k = i;
+                    chip(fm, fmn[i], canvas.fingerMode == i, v -> { canvas.fingerMode = k; prefs.edit().putInt("fingerMode", k).apply(); pop.win.dismiss(); });
+                }
+                pop.add(fm);
                 pop.section("Interface size");
                 LinearLayout sz = barRow();
                 String[] szn = {"Small", "Medium", "Large"};
@@ -1250,10 +1260,6 @@ public class MainActivity extends Activity {
             case 11: toggleReference(); break;
             case 12: toggleAnimation(); break;
             case 13: timelapseMenu(anchor); break;
-            case 14:
-                canvas.fingerPaint = !canvas.fingerPaint;
-                prefs.edit().putBoolean("fingerPaint", canvas.fingerPaint).apply();
-                break;
             case 7:
                 sideLp.gravity = sideLp.gravity == (Gravity.START | Gravity.CENTER_VERTICAL)
                         ? Gravity.END | Gravity.CENTER_VERTICAL : Gravity.START | Gravity.CENTER_VERTICAL;

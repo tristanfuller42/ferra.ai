@@ -300,4 +300,26 @@ public class ProcreateParityTest extends Base {
         prefs.edit().putBoolean("light", false).putInt("uiSize", 1).commit();
         try { java.lang.reflect.Field f = Class.forName("ai.inkwell.Ui").getDeclaredField("light"); f.setAccessible(true); f.set(null, false); } catch (Exception e) { }
     }
+
+    @Test public void finger_erases_after_stylus() {
+        call(act, "setTool", CanvasView.ERASE);
+        cv.size = 60;
+        call(act, "setTool", CanvasView.DRAW);
+        cv.size = 30;
+        float[][] across = new float[21][];
+        for (int i = 0; i <= 20; i++) across[i] = new float[]{W * (.2f + .6f * i / 20), H * .5f};
+        stroke(across, MotionEvent.TOOL_TYPE_STYLUS, 1f);
+        assertTrue("stylus drew", alphaAt(L(), W * .5f, H * .5f) > 200);
+        // default mode: one finger erases, using the Eraser's size
+        line(W * .5f, H * .3f, W * .5f, H * .7f);
+        assertEquals("finger erased", 0, alphaAt(L(), W * .5f, H * .5f));
+        assertTrue("rest kept", alphaAt(L(), W * .25f, H * .5f) > 200);
+        assertEquals("brush size restored", 30f, cv.size, 0.01f);
+        assertEquals(CanvasView.DRAW, cv.tool);
+        // Navigate mode: finger leaves the pixels alone
+        cv.fingerMode = 0;
+        int[] d = toDoc(W * .3f, H * .5f);
+        line(W * .3f, H * .3f, W * .3f, H * .7f);
+        assertTrue("navigate does not erase", (L().getPixel(d[0], d[1]) >>> 24) > 200);
+    }
 }

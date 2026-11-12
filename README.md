@@ -99,7 +99,8 @@ long-press to rename, duplicate or delete. Drawings save automatically.
     or an ellipse if the stroke ends near where it started.
 - **Move tool**: drag moves the current layer; pinch/twist scales and rotates it. Applied when you pick another tool.
 - **Layers**: add, copy, delete, reorder, merge down, clear, hide/show, opacity.
-- Once a stylus is used, single fingers only pan (palm rejection).
+- Once a stylus is used, one finger **erases** (with the Eraser's brush and size). Prefs → Finger when using a stylus:
+  Navigate / Paint / Erase. Two fingers still zoom and pan.
 - **Canvas**: start a new drawing at any size (presets: screen, square, A4/Letter/A5 at 300 dpi, comic page, HD, 4K, Instagram, or custom), or resize the current one (scale artwork, or crop/extend). Max about 9 megapixels.
 
 ## Files
