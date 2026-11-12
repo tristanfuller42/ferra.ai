@@ -1358,6 +1358,24 @@ public class MainActivity extends Activity {
 
     private void guideMenu(View anchor) { guideEditor(); }
 
+    /** Actions → Canvas → Drawing guide switch: shows the last-used guide (2D Grid the first time), like Procreate. */
+    private void setGuideOn(boolean on) {
+        if (on) {
+            int g = prefs.getInt("lastGuide", 1);
+            canvas.guide = g;
+            if (g >= 7) { // perspective needs points
+                boolean unset = true;
+                for (float v : canvas.vp) if (v != 0) unset = false;
+                if (unset) canvas.resetVps();
+            }
+        } else {
+            if (canvas.guide != 0) prefs.edit().putInt("lastGuide", canvas.guide).apply();
+            canvas.guide = 0;
+            canvas.editGuide = false;
+        }
+        canvas.invalidate();
+    }
+
     private void editVanishingPoints() { guideEditor(); }
 
     private int guideTab() {
@@ -1452,7 +1470,12 @@ public class MainActivity extends Activity {
             canvas.resetVps();
             canvas.guideEdit(before, gb);
         });
-        chip(end, "Done", true, v -> { canvas.editGuide = false; canvas.invalidate(); bottom.setVisibility(View.GONE); });
+        chip(end, "Done", true, v -> {
+            canvas.editGuide = false;
+            if (canvas.guide != 0) prefs.edit().putInt("lastGuide", canvas.guide).apply(); // the switch brings this one back
+            canvas.invalidate();
+            bottom.setVisibility(View.GONE);
+        });
         showBar(types, box, end);
     }
 
@@ -1520,7 +1543,7 @@ public class MainActivity extends Activity {
                 pop.item("Crop & resize", true, this::startCrop);
                 pop.toggle("Animation Assist", canvas.anim, v -> { pop.win.dismiss(); action(12, anchor); });
                 pop.toggle("Page Assist", canvas.pages, v -> { pop.win.dismiss(); togglePages(); });
-                pop.toggle("Drawing guide", canvas.guide != 0, v -> { pop.win.dismiss(); if (v) guideMenu(anchor); else { canvas.guide = 0; canvas.invalidate(); } });
+                pop.toggle("Drawing guide", canvas.guide != 0, this::setGuideOn);
                 pop.item("Edit drawing guide", true, () -> guideMenu(anchor));
                 pop.toggle("Reference", refView != null && refView.getVisibility() == View.VISIBLE, v -> { pop.win.dismiss(); action(11, anchor); });
                 pop.item("Flip canvas horizontally", true, () -> canvas.flipView(true));

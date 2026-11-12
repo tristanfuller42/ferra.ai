@@ -268,4 +268,44 @@ public class BatchFourTest extends Base {
         try { prov.openFile(android.net.Uri.parse("content://app.inkwell.files/..%2Fsecret"), "r"); fail("must not leave the share folder"); }
         catch (java.io.FileNotFoundException expected) { }
     }
+
+    android.widget.Switch guideSwitch() {
+        call(act, "actionsMenu", cv, 1); settle();
+        Object pop = UiTest.latestPop();
+        View box = (View) get(pop, "box");
+        List<View> all = new ArrayList<>();
+        Deque<View> q = new ArrayDeque<>(Collections.singleton(box));
+        while (!q.isEmpty()) { View v = q.poll(); all.add(v); if (v instanceof android.view.ViewGroup) for (int k = 0; k < ((android.view.ViewGroup) v).getChildCount(); k++) q.add(((android.view.ViewGroup) v).getChildAt(k)); }
+        for (View v : all) if (v instanceof android.widget.Switch && "Drawing guide".contentEquals(((android.widget.Switch) v).getText())) return (android.widget.Switch) v;
+        return null;
+    }
+
+    @Test public void drawing_guide_switch_shows_and_hides_the_guide() {
+        assertEquals(0, cv.guide);
+        android.widget.Switch sw = guideSwitch();
+        assertNotNull(sw);
+        assertFalse(sw.isChecked());
+        sw.setChecked(true); settle();
+        assertEquals("on: 2D grid the first time", 1, cv.guide);
+        sw.setChecked(false); settle();
+        assertEquals("off", 0, cv.guide);
+        // the switch brings back the last guide used
+        cv.guide = 6; // isometric
+        sw = guideSwitch();
+        assertTrue("shows it is on", sw.isChecked());
+        sw.setChecked(false); settle();
+        assertEquals(0, cv.guide);
+        sw = guideSwitch();
+        sw.setChecked(true); settle();
+        assertEquals("isometric again", 6, cv.guide);
+        // perspective gets its points
+        sw.setChecked(false);
+        act.getSharedPreferences("inkwell", 0).edit().putInt("lastGuide", 7).commit();
+        java.util.Arrays.fill(cv.vp, 0);
+        guideSwitch().setChecked(true); settle();
+        assertEquals(7, cv.guide);
+        boolean set = false; for (float v : cv.vp) if (v != 0) set = true;
+        assertTrue("vanishing point placed", set);
+        settle(); shot("91_guide_on");
+    }
 }
